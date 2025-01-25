@@ -11,7 +11,6 @@ import android.content.pm.PackageManager
 import androidx.core.app.ActivityCompat
 import androidx.lifecycle.LiveData
 import androidx.lifecycle.MutableLiveData
-import android.util.Log
 
 class BluetoothMonitor(private val context: Context) {
     // 蓝牙适配器
@@ -67,10 +66,7 @@ class BluetoothMonitor(private val context: Context) {
             pairedDevicesSet?.forEach { device ->
                 // 假设设备已连接（需要根据具体协议或服务判断）
                 connectedDeviceNames.add(device.name)
-                Log.d("BluetoothMonitor", "Paired device: ${device.name}")
             }
-        } else {
-            Log.d("BluetoothMonitor", "Permission not granted")
         }
         return connectedDeviceNames
     }
