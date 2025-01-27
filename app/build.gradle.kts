@@ -57,4 +57,7 @@ dependencies {
     androidTestImplementation(libs.androidx.ui.test.junit4)
     debugImplementation(libs.androidx.ui.tooling)
     debugImplementation(libs.androidx.ui.test.manifest)
+    implementation("com.amazonaws:aws-android-sdk-iot:2.22.+")
+    implementation("com.amazonaws:aws-android-sdk-core:2.22.+")
+    implementation("org.bouncycastle:bcprov-jdk15on:1.70")
 }
