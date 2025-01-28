@@ -33,10 +33,17 @@ import javax.net.ssl.KeyManagerFactory
 import javax.net.ssl.SSLContext
 import android.os.Handler
 import android.os.Looper
+import com.amazonaws.auth.CognitoCachingCredentialsProvider
+import com.amazonaws.regions.Regions
+import com.amazonaws.mobileconnectors.dynamodbv2.dynamodbmapper.DynamoDBMapper
+import com.amazonaws.mobileconnectors.dynamodbv2.dynamodbmapper.DynamoDBTable
+import com.amazonaws.mobileconnectors.dynamodbv2.dynamodbmapper.DynamoDBHashKey
+import com.amazonaws.mobileconnectors.dynamodbv2.dynamodbmapper.DynamoDBAttribute
+import com.amazonaws.mobileconnectors.dynamodbv2.dynamodbmapper.DynamoDBMapperConfig
 
 class MainActivity : ComponentActivity() {
     private val customerSpecificEndpoint = "aiier2of1blw9-ats.iot.us-east-1.amazonaws.com"
-    private val clientId = "android-device-${System.currentTimeMillis()}"  // 使用唯一的客户端ID
+    private val clientId = "android-device-${System.currentTimeMillis()}"
     private lateinit var mqttManager: AWSIotMqttManager
     private var isConnected = false
     private var debugMessage by mutableStateOf("正在连接...")
@@ -45,6 +52,8 @@ class MainActivity : ComponentActivity() {
     private lateinit var wifiMonitor: WifiMonitor
     private var connectionAttempts = 0
     private val maxConnectionAttempts = 5
+
+    private lateinit var credentialsProvider: CognitoCachingCredentialsProvider
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -57,6 +66,13 @@ class MainActivity : ComponentActivity() {
         // 初始化蓝牙和WiFi监控器
         bluetoothMonitor = BluetoothMonitor(this)
         wifiMonitor = WifiMonitor(this)
+
+        // 初始化 AWS Cognito Credentials Provider
+        credentialsProvider = CognitoCachingCredentialsProvider(
+            applicationContext,
+            "us-east-1:cbcf1279-b75b-4f2d-8d21-63cd03ea354a",
+            Regions.US_EAST_1
+        )
 
         setContent {
             MyApplicationTheme {
@@ -317,10 +333,13 @@ class MainActivity : ComponentActivity() {
 
                 mqttManager.publishString(
                     wifiStatusMessage,
-                    "sdk/test/java",  // 使用相同的主题
-                    AWSIotMqttQos.QOS1  // 使用相同的 QoS 级别
+                    "sdk/test/java",
+                    AWSIotMqttQos.QOS1
                 )
                 Log.d("AWS-IoT", "Wi-Fi 状态已发送: $wifiStatusMessage")
+
+                // 保存 Wi-Fi 状态到 DynamoDB
+                saveWifiStatusToDynamoDB(connectedWifiSSID, isWifiEnabled)
             } else {
                 debugMessage = "MQTT client is not connected."
                 Log.w("AWS-IoT", "MQTT未连接，无法发送 Wi-Fi 状态")
@@ -344,7 +363,6 @@ class MainActivity : ComponentActivity() {
                 val inputStream = assetManager.open(fileName)
                 val outputFile = File(filesDir, fileName)
 
-                // 如果文件已存在，先删除它
                 if (outputFile.exists()) {
                     outputFile.delete()
                     Log.d("FileCopy", "删除已存在的文件: $fileName")
@@ -363,6 +381,25 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    private fun saveWifiStatusToDynamoDB(ssid: String, isConnected: Boolean) {
+        val dynamoDBMapper = DynamoDBMapper(credentialsProvider)
+
+        val wifiStatus = WifiStatus(
+            id = System.currentTimeMillis().toString(), // 使用当前时间戳作为唯一 ID
+            ssid = ssid,
+            isConnected = isConnected
+        )
+
+        Thread {
+            try {
+                dynamoDBMapper.save(wifiStatus)
+                Log.d("DynamoDB", "Wi-Fi 状态已保存到 DynamoDB")
+            } catch (e: Exception) {
+                Log.e("DynamoDB", "保存 Wi-Fi 状态失败", e)
+            }
+        }.start()
+    }
+
     override fun onDestroy() {
         super.onDestroy()
         // 断开MQTT连接
@@ -377,3 +414,16 @@ class MainActivity : ComponentActivity() {
         bluetoothMonitor.cleanup()
     }
 }
+
+// 定义数据模型
+@DynamoDBTable(tableName = "WifiStatusTable")
+data class WifiStatus(
+    @get:DynamoDBHashKey
+    var id: String = "",
+
+    @get:DynamoDBAttribute
+    var ssid: String = "",
+
+    @get:DynamoDBAttribute
+    var isConnected: Boolean = false
+)
