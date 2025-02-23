@@ -335,7 +335,7 @@ class MainActivity : ComponentActivity() {
             }
         } catch (e: Exception) {
             debugMessage = "Error sending WiFi status: ${e.message}"
-            Log.e("AWS-IoT", "发送 Wi-Fi 状态时出错", e)
+            Log.e("AWS-IoT", "发送 Wi-Fi 状态时出错!", e)
             e.printStackTrace()
         }
     }
