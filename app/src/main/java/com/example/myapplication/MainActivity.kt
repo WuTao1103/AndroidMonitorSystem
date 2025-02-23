@@ -235,7 +235,7 @@ class MainActivity : ComponentActivity() {
                 runOnUiThread {
                     when (status) {
                         AWSIotMqttClientStatusCallback.AWSIotMqttClientStatus.Connected -> {
-                            Log.d("AWS-IoT", "连接成功")
+                            Log.d("AWS-IoT", "连接成功!")
                             isConnected = true
                             debugMessage = "MQTT客户端已连接"
 
