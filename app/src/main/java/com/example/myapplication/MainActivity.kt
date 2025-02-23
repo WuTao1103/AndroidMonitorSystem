@@ -33,6 +33,7 @@ import javax.net.ssl.KeyManagerFactory
 import javax.net.ssl.SSLContext
 import android.os.Handler
 import android.os.Looper
+import org.json.JSONObject
 
 class MainActivity : ComponentActivity() {
     private val customerSpecificEndpoint = "aiier2of1blw9-ats.iot.us-east-1.amazonaws.com"
@@ -126,7 +127,6 @@ class MainActivity : ComponentActivity() {
             // MQTT发送按钮
             Button(
                 onClick = {
-                    sendMessage("Hello from Android!")
                     // 添加短暂延迟后发送 WiFi 状态
                     Handler(Looper.getMainLooper()).postDelayed({
                         sendWifiStatus()
@@ -313,7 +313,15 @@ class MainActivity : ComponentActivity() {
             if (isConnected) {
                 val isWifiEnabled = wifiMonitor.wifiState.value ?: false
                 val connectedWifiSSID = wifiMonitor.connectedWifiSSID.value ?: "Not connected"
-                val wifiStatusMessage = "Wi-Fi is ${if (isWifiEnabled) "ON" else "OFF"}, Connected SSID: $connectedWifiSSID"
+
+                // 创建 JSON 对象
+                val wifiStatusJson = JSONObject().apply {
+                    put("wifiStatus", if (isWifiEnabled) "ON" else "OFF")
+                    put("connectedSSID", connectedWifiSSID)
+                }
+
+                // 将 JSON 对象转换为字符串
+                val wifiStatusMessage = wifiStatusJson.toString()
 
                 mqttManager.publishString(
                     wifiStatusMessage,
