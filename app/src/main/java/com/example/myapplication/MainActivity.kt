@@ -20,6 +20,8 @@ import androidx.core.app.ActivityCompat
 import com.example.myapplication.ui.theme.MyApplicationTheme
 import com.example.myapplication.bluetooth.BluetoothMonitor
 import com.example.myapplication.wifi.WifiMonitor
+import com.example.myapplication.screenbright.ScreenBrightnessMonitor
+
 import com.amazonaws.mobileconnectors.iot.AWSIotMqttManager
 import com.amazonaws.mobileconnectors.iot.AWSIotMqttQos
 import com.amazonaws.mobileconnectors.iot.AWSIotMqttClientStatusCallback
@@ -34,6 +36,13 @@ import javax.net.ssl.SSLContext
 import android.os.Handler
 import android.os.Looper
 import org.json.JSONObject
+import android.content.ContentResolver
+import android.provider.Settings
+import android.content.Intent
+import android.net.Uri
+
+
+
 
 class MainActivity : ComponentActivity() {
     private val customerSpecificEndpoint = "aiier2of1blw9-ats.iot.us-east-1.amazonaws.com"
@@ -47,6 +56,8 @@ class MainActivity : ComponentActivity() {
     private var connectionAttempts = 0
     private val maxConnectionAttempts = 5
 
+    private lateinit var screenBrightnessMonitor: ScreenBrightnessMonitor
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         Log.d("MainActivity", "onCreate called")
@@ -59,6 +70,9 @@ class MainActivity : ComponentActivity() {
         bluetoothMonitor = BluetoothMonitor(this)
         wifiMonitor = WifiMonitor(this)
 
+        // Initialize ScreenBrightnessMonitor
+        screenBrightnessMonitor = ScreenBrightnessMonitor(this)
+
         setContent {
             MyApplicationTheme {
                 Scaffold(modifier = Modifier.fillMaxSize()) { innerPadding ->
@@ -69,6 +83,15 @@ class MainActivity : ComponentActivity() {
 
         copyFilesToInternalStorage()
         connectToAWSIoT()
+
+        val brightness = getScreenBrightness(contentResolver)
+        Log.d("ScreenBrightness", "Current screen brightness: $brightness")
+
+        if (!Settings.System.canWrite(this)) {
+            val intent = Intent(Settings.ACTION_MANAGE_WRITE_SETTINGS)
+            intent.data = Uri.parse("package:$packageName")
+            startActivity(intent)
+        }
     }
 
     private fun requestPermissions() {
@@ -90,11 +113,7 @@ class MainActivity : ComponentActivity() {
 
     @Composable
     fun MainScreen(innerPadding: PaddingValues) {
-        // Observe Bluetooth and WiFi status
-        val isBluetoothEnabled by bluetoothMonitor.bluetoothState.observeAsState(false)
-        val pairedDevices by bluetoothMonitor.pairedDevices.observeAsState(emptyList())
-        val isWifiEnabled by wifiMonitor.wifiState.observeAsState(false)
-        val connectedWifiSSID by wifiMonitor.connectedWifiSSID.observeAsState("Not connected")
+        val brightness by screenBrightnessMonitor.screenBrightness.observeAsState(-1)
 
         Column(
             modifier = Modifier
@@ -102,6 +121,18 @@ class MainActivity : ComponentActivity() {
                 .fillMaxSize()
                 .padding(16.dp)
         ) {
+            // Display screen brightness
+            Text(
+                text = "Screen Brightness: $brightness",
+                modifier = Modifier.padding(bottom = 8.dp)
+            )
+
+            // Observe Bluetooth and WiFi status
+            val isBluetoothEnabled by bluetoothMonitor.bluetoothState.observeAsState(false)
+            val pairedDevices by bluetoothMonitor.pairedDevices.observeAsState(emptyList())
+            val isWifiEnabled by wifiMonitor.wifiState.observeAsState(false)
+            val connectedWifiSSID by wifiMonitor.connectedWifiSSID.observeAsState("Not connected")
+
             // Bluetooth status display
             Text(
                 text = if (isBluetoothEnabled) "Bluetooth is turned on" else "Bluetooth is turned off",
@@ -383,5 +414,14 @@ class MainActivity : ComponentActivity() {
         }
         // Clean up Bluetooth resources
         bluetoothMonitor.cleanup()
+    }
+
+    fun getScreenBrightness(contentResolver: ContentResolver): Int {
+        return try {
+            Settings.System.getInt(contentResolver, Settings.System.SCREEN_BRIGHTNESS)
+        } catch (e: Settings.SettingNotFoundException) {
+            Log.e("ScreenBrightness", "Error getting screen brightness", e)
+            -1
+        }
     }
 }
