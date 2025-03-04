@@ -11,6 +11,7 @@ import android.content.pm.PackageManager
 import androidx.core.app.ActivityCompat
 import androidx.lifecycle.LiveData
 import androidx.lifecycle.MutableLiveData
+import android.util.Log
 
 class BluetoothMonitor(private val context: Context) {
     // 蓝牙适配器
@@ -51,9 +52,10 @@ class BluetoothMonitor(private val context: Context) {
     private fun loadPairedDevices() {
         if (ActivityCompat.checkSelfPermission(context, Manifest.permission.BLUETOOTH_CONNECT) == PackageManager.PERMISSION_GRANTED) {
             val pairedDevicesSet: Set<BluetoothDevice>? = bluetoothAdapter?.bondedDevices
+
             _pairedDevices.value = pairedDevicesSet?.toList() ?: emptyList()
+            Log.d("BluetoothMonitor", "Paired devices: ${_pairedDevices.value?.size}")
         } else {
-            // 权限未授予时的处理
             _pairedDevices.value = emptyList()
         }
     }

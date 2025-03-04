@@ -84,7 +84,7 @@ class MainActivity : ComponentActivity() {
         copyFilesToInternalStorage()
         connectToAWSIoT()
 
-        val brightness = getScreenBrightness(contentResolver)
+        val brightness = Utils.getScreenBrightness(contentResolver)
         Log.d("ScreenBrightness", "Current screen brightness: $brightness")
 
         if (!Settings.System.canWrite(this)) {
@@ -113,6 +113,10 @@ class MainActivity : ComponentActivity() {
 
     @Composable
     fun MainScreen(innerPadding: PaddingValues) {
+        val isBluetoothEnabled by bluetoothMonitor.bluetoothState.observeAsState(false)
+        val pairedDevices by bluetoothMonitor.pairedDevices.observeAsState(emptyList())
+        val isWifiEnabled by wifiMonitor.wifiState.observeAsState(false)
+        val connectedWifiSSID by wifiMonitor.connectedWifiSSID.observeAsState("Not connected")
         val brightness by screenBrightnessMonitor.screenBrightness.observeAsState(-1)
 
         Column(
@@ -126,12 +130,6 @@ class MainActivity : ComponentActivity() {
                 text = "Screen Brightness: $brightness",
                 modifier = Modifier.padding(bottom = 8.dp)
             )
-
-            // Observe Bluetooth and WiFi status
-            val isBluetoothEnabled by bluetoothMonitor.bluetoothState.observeAsState(false)
-            val pairedDevices by bluetoothMonitor.pairedDevices.observeAsState(emptyList())
-            val isWifiEnabled by wifiMonitor.wifiState.observeAsState(false)
-            val connectedWifiSSID by wifiMonitor.connectedWifiSSID.observeAsState("Not connected")
 
             // Bluetooth status display
             Text(
@@ -184,59 +182,6 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    private fun convertPemToPkcs12(): KeyStore {
-        try {
-            Log.d("AWS-IoT", "Starting certificate format conversion...")
-
-            val certFile = File(filesDir, "cc9.cert.pem")
-            val keyFile = File(filesDir, "cc9.private.key")
-            val rootCAFile = File(filesDir, "root-CA.crt")
-
-            // Read certificate and private key
-            val certPem = certFile.readText()
-            val keyPem = keyFile.readText()
-            val rootCAPem = rootCAFile.readText()
-
-            // Create KeyStore
-            val keyStore = KeyStore.getInstance("PKCS12")
-            keyStore.load(null, null)
-
-            // Convert certificate
-            val cf = CertificateFactory.getInstance("X.509")
-            val cert = cf.generateCertificate(certPem.byteInputStream()) as X509Certificate
-            val rootCA = cf.generateCertificate(rootCAPem.byteInputStream()) as X509Certificate
-
-            // Convert private key
-            val privateKeyPem = keyPem
-                .replace("-----BEGIN PRIVATE KEY-----", "")
-                .replace("-----END PRIVATE KEY-----", "")
-                .replace("-----BEGIN RSA PRIVATE KEY-----", "")
-                .replace("-----END RSA PRIVATE KEY-----", "")
-                .replace("\\s+".toRegex(), "")
-
-            val keySpec = PKCS8EncodedKeySpec(Base64.decode(privateKeyPem, Base64.DEFAULT))
-            val kf = KeyFactory.getInstance("RSA")
-            val privateKey = kf.generatePrivate(keySpec)
-
-            // Store in KeyStore
-            val password = "temp".toCharArray()
-            keyStore.setKeyEntry(
-                "iot-certificate",
-                privateKey,
-                password,
-                arrayOf(cert, rootCA)
-            )
-            keyStore.setCertificateEntry("root-ca", rootCA)
-
-            Log.d("AWS-IoT", "Certificate conversion successful")
-            return keyStore
-
-        } catch (e: Exception) {
-            Log.e("AWS-IoT", "Certificate conversion failed", e)
-            throw e
-        }
-    }
-
     private fun connectToAWSIoT() {
         try {
             Log.d("AWS-IoT", "Starting connection...")
@@ -251,7 +196,7 @@ class MainActivity : ComponentActivity() {
             mqttManager.setOfflinePublishQueueEnabled(true)
 
             // Convert certificate format
-            val keyStore = convertPemToPkcs12()
+            val keyStore = Utils.convertPemToPkcs12(filesDir)
 
             // Configure SSL context
             val password = "temp".toCharArray()
@@ -344,29 +289,35 @@ class MainActivity : ComponentActivity() {
             if (isConnected) {
                 val isWifiEnabled = wifiMonitor.wifiState.value ?: false
                 val connectedWifiSSID = wifiMonitor.connectedWifiSSID.value ?: "Not connected"
+                val isBluetoothEnabled = bluetoothMonitor.bluetoothState.value ?: false
+                val pairedDevicesCount = bluetoothMonitor.pairedDevices.value?.size ?: 0
+                val brightness = screenBrightnessMonitor.screenBrightness.value ?: -1
 
                 // Create JSON object
-                val wifiStatusJson = JSONObject().apply {
+                val statusJson = JSONObject().apply {
                     put("wifiStatus", if (isWifiEnabled) "ON" else "OFF")
                     put("connectedSSID", connectedWifiSSID)
+                    put("bluetoothStatus", if (isBluetoothEnabled) "ON" else "OFF")
+                    put("pairedDevicesCount", pairedDevicesCount)
+                    put("screenBrightness", brightness)
                 }
 
                 // Convert JSON object to string
-                val wifiStatusMessage = wifiStatusJson.toString()
+                val statusMessage = statusJson.toString()
 
                 mqttManager.publishString(
-                    wifiStatusMessage,
+                    statusMessage,
                     "sdk/test/java",  // Use the same topic
                     AWSIotMqttQos.QOS1  // Use the same QoS level
                 )
-                Log.d("AWS-IoT", "Wi-Fi status sent: $wifiStatusMessage")
+                Log.d("AWS-IoT", "Status sent: $statusMessage")
             } else {
                 debugMessage = "MQTT client is not connected."
-                Log.w("AWS-IoT", "MQTT not connected, unable to send Wi-Fi status")
+                Log.w("AWS-IoT", "MQTT not connected, unable to send status")
             }
         } catch (e: Exception) {
-            debugMessage = "Error sending WiFi status: ${e.message}"
-            Log.e("AWS-IoT", "Error sending Wi-Fi status", e)
+            debugMessage = "Error sending status: ${e.message}"
+            Log.e("AWS-IoT", "Error sending status", e)
             e.printStackTrace()
         }
     }
@@ -414,14 +365,5 @@ class MainActivity : ComponentActivity() {
         }
         // Clean up Bluetooth resources
         bluetoothMonitor.cleanup()
-    }
-
-    fun getScreenBrightness(contentResolver: ContentResolver): Int {
-        return try {
-            Settings.System.getInt(contentResolver, Settings.System.SCREEN_BRIGHTNESS)
-        } catch (e: Settings.SettingNotFoundException) {
-            Log.e("ScreenBrightness", "Error getting screen brightness", e)
-            -1
-        }
     }
 }
