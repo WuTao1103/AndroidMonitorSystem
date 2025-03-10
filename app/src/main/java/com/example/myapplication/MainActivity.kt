@@ -40,9 +40,13 @@ import android.content.ContentResolver
 import android.provider.Settings
 import android.content.Intent
 import android.net.Uri
-
-
-
+import android.net.NetworkInfo
+import android.net.wifi.WifiManager
+import android.content.BroadcastReceiver
+import android.content.Context
+import android.bluetooth.BluetoothDevice
+import android.content.IntentFilter
+import android.database.ContentObserver
 
 class MainActivity : ComponentActivity() {
     private val customerSpecificEndpoint = "aiier2of1blw9-ats.iot.us-east-1.amazonaws.com"
@@ -57,6 +61,11 @@ class MainActivity : ComponentActivity() {
     private val maxConnectionAttempts = 5
 
     private lateinit var screenBrightnessMonitor: ScreenBrightnessMonitor
+
+    private lateinit var wifiReceiver: WifiStateReceiver
+    private lateinit var bluetoothReceiver: BluetoothDeviceReceiver
+
+    private lateinit var brightnessObserver: BrightnessObserver
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -92,6 +101,33 @@ class MainActivity : ComponentActivity() {
             intent.data = Uri.parse("package:$packageName")
             startActivity(intent)
         }
+
+        // Register WiFi state receiver
+        wifiReceiver = WifiStateReceiver { status, ssid ->
+            sendWifiStatusChange(status, ssid)
+        }
+        registerReceiver(wifiReceiver, IntentFilter(WifiManager.NETWORK_STATE_CHANGED_ACTION))
+
+        // Register Bluetooth device receiver
+        bluetoothReceiver = BluetoothDeviceReceiver { deviceName, status ->
+            sendBluetoothDeviceChange(deviceName, status)
+        }
+        registerReceiver(bluetoothReceiver, IntentFilter(BluetoothDevice.ACTION_ACL_CONNECTED))
+        registerReceiver(bluetoothReceiver, IntentFilter(BluetoothDevice.ACTION_ACL_DISCONNECTED))
+
+        // Register brightness change listener
+        val handler = Handler(Looper.getMainLooper())
+        brightnessObserver = BrightnessObserver(this, handler) { brightness ->
+            sendBrightnessChange(brightness)
+        }
+        contentResolver.registerContentObserver(
+            Settings.System.getUriFor(Settings.System.SCREEN_BRIGHTNESS),
+            true,
+            brightnessObserver
+        )
+
+        // 发送初始状态
+        sendInitialStatus()
     }
 
     private fun requestPermissions() {
@@ -108,6 +144,10 @@ class MainActivity : ComponentActivity() {
                 ActivityCompat.checkSelfPermission(this, it) == PackageManager.PERMISSION_GRANTED
             }) {
             ActivityCompat.requestPermissions(this, permissions, 1)
+        }
+
+        if (ActivityCompat.checkSelfPermission(this, Manifest.permission.BLUETOOTH_CONNECT) != PackageManager.PERMISSION_GRANTED) {
+            ActivityCompat.requestPermissions(this, arrayOf(Manifest.permission.BLUETOOTH_CONNECT), 1)
         }
     }
 
@@ -173,6 +213,8 @@ class MainActivity : ComponentActivity() {
             ) {
                 Text("Reconnect MQTT")
             }
+
+
 
             // Debug information display
             Text(
@@ -365,5 +407,114 @@ class MainActivity : ComponentActivity() {
         }
         // Clean up Bluetooth resources
         bluetoothMonitor.cleanup()
+        unregisterReceiver(wifiReceiver)
+        unregisterReceiver(bluetoothReceiver)
+    }
+
+    fun sendWifiStatusChange(wifiStatus: String, connectedSSID: String) {
+        val message = JSONObject().apply {
+            put("wifiStatus", wifiStatus)
+            put("connectedSSID", connectedSSID)
+        }
+        if (isConnected) {
+            mqttManager.publishString(message.toString(), "AMS/wifi", AWSIotMqttQos.QOS1)
+        } else {
+            Log.e("MainActivity", "MQTT client is not connected")
+        }
+    }
+
+    fun sendBluetoothDeviceChange(deviceName: String, status: String) {
+        val message = JSONObject().apply {
+            put("deviceName", deviceName)
+            put("status", status)
+        }
+        mqttManager.publishString(message.toString(), "AMS/bluetooth", AWSIotMqttQos.QOS1)
+    }
+
+    fun sendBrightnessChange(screenBrightness: Int) {
+        val message = JSONObject().apply {
+            put("screenBrightness", screenBrightness)
+        }
+        if (isConnected) {
+            mqttManager.publishString(message.toString(), "AMS/brightness", AWSIotMqttQos.QOS1)
+        } else {
+            Log.e("MainActivity", "MQTT client is not connected")
+        }
+    }
+
+    fun sendBluetoothDeviceChange(bluetoothStatus: String, pairedDevicesCount: Int) {
+        val message = JSONObject().apply {
+            put("bluetoothStatus", bluetoothStatus)
+            put("pairedDevicesCount", pairedDevicesCount)
+        }
+        if (isConnected) {
+            mqttManager.publishString(message.toString(), "AMS/bluetooth", AWSIotMqttQos.QOS1)
+        } else {
+            Log.e("MainActivity", "MQTT client is not connected")
+        }
+    }
+
+    private fun sendInitialStatus() {
+        // 获取当前 WiFi 状态
+        val wifiManager = applicationContext.getSystemService(Context.WIFI_SERVICE) as WifiManager
+        val wifiStatus = if (wifiManager.isWifiEnabled) "ON" else "OFF"
+        val connectedSSID = wifiManager.connectionInfo.ssid ?: "Unknown"
+        sendWifiStatusChange(wifiStatus, connectedSSID)
+
+        // 获取当前蓝牙状态
+        val bluetoothStatus = if (bluetoothMonitor.bluetoothState.value == true) "ON" else "OFF"
+        val pairedDevicesCount = bluetoothMonitor.pairedDevices.value?.size ?: 0
+        sendBluetoothDeviceChange(bluetoothStatus, pairedDevicesCount)
+
+        // 获取当前屏幕亮度
+        val brightness = Utils.getScreenBrightness(contentResolver)
+        sendBrightnessChange(brightness)
+    }
+
+}
+
+class WifiStateReceiver(private val onWifiStateChanged: (String, String) -> Unit) : BroadcastReceiver() {
+    override fun onReceive(context: Context?, intent: Intent?) {
+        if (intent?.action == WifiManager.NETWORK_STATE_CHANGED_ACTION) {
+            val networkInfo = intent.getParcelableExtra<NetworkInfo>(WifiManager.EXTRA_NETWORK_INFO)
+            val wifiManager = context?.applicationContext?.getSystemService(Context.WIFI_SERVICE) as WifiManager
+            val connectedSSID = wifiManager.connectionInfo.ssid ?: "Unknown"
+            if (networkInfo?.isConnected == true) {
+                onWifiStateChanged("Connected", connectedSSID)
+            } else {
+                onWifiStateChanged("Disconnected", "Not connected")
+            }
+        }
+    }
+}
+
+class BluetoothDeviceReceiver(private val onBluetoothDeviceChanged: (String, String) -> Unit) : BroadcastReceiver() {
+    override fun onReceive(context: Context?, intent: Intent?) {
+        when (intent?.action) {
+            BluetoothDevice.ACTION_ACL_CONNECTED -> {
+                val device = intent.getParcelableExtra<BluetoothDevice>(BluetoothDevice.EXTRA_DEVICE)
+                device?.let {
+                    onBluetoothDeviceChanged(it.name ?: "Unknown", "Connected")
+                }
+            }
+            BluetoothDevice.ACTION_ACL_DISCONNECTED -> {
+                val device = intent.getParcelableExtra<BluetoothDevice>(BluetoothDevice.EXTRA_DEVICE)
+                device?.let {
+                    onBluetoothDeviceChanged(it.name ?: "Unknown", "Disconnected")
+                }
+            }
+        }
+    }
+}
+
+class BrightnessObserver(
+    private val context: Context,
+    handler: Handler,
+    private val onBrightnessChanged: (Int) -> Unit
+) : ContentObserver(handler) {
+    override fun onChange(selfChange: Boolean) {
+        super.onChange(selfChange)
+        val brightness = Settings.System.getInt(context.contentResolver, Settings.System.SCREEN_BRIGHTNESS, -1)
+        onBrightnessChanged(brightness)
     }
 }

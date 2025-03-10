@@ -19,7 +19,8 @@ class ScreenBrightnessMonitor(private val context: Context) {
     }
 
     private fun updateScreenBrightness() {
-        _screenBrightness.value = getScreenBrightness(context.contentResolver)
+        val brightnessValue = getScreenBrightness(context.contentResolver)
+        _screenBrightness.value = normalizeBrightness(brightnessValue)
     }
 
     private fun getScreenBrightness(contentResolver: ContentResolver): Int {
@@ -28,6 +29,15 @@ class ScreenBrightnessMonitor(private val context: Context) {
         } catch (e: Settings.SettingNotFoundException) {
             Log.e("ScreenBrightness", "Error getting screen brightness", e)
             -1
+        }
+    }
+
+    private fun normalizeBrightness(brightness: Int): Int {
+        val maxBrightness = 2047
+        return if (brightness in 0..maxBrightness) {
+            (brightness * 100) / maxBrightness
+        } else {
+            0
         }
     }
 } 

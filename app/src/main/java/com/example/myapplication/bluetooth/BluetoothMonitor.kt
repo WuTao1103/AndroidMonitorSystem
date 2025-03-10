@@ -12,6 +12,8 @@ import androidx.core.app.ActivityCompat
 import androidx.lifecycle.LiveData
 import androidx.lifecycle.MutableLiveData
 import android.util.Log
+import android.bluetooth.BluetoothGatt
+import android.bluetooth.BluetoothGattCallback
 
 class BluetoothMonitor(private val context: Context) {
     // 蓝牙适配器
@@ -56,6 +58,7 @@ class BluetoothMonitor(private val context: Context) {
             _pairedDevices.value = pairedDevicesSet?.toList() ?: emptyList()
             Log.d("BluetoothMonitor", "Paired devices: ${_pairedDevices.value?.size}")
         } else {
+            Log.w("BluetoothMonitor", "Bluetooth connect permission not granted")
             _pairedDevices.value = emptyList()
         }
     }
@@ -66,11 +69,32 @@ class BluetoothMonitor(private val context: Context) {
         if (ActivityCompat.checkSelfPermission(context, Manifest.permission.BLUETOOTH_CONNECT) == PackageManager.PERMISSION_GRANTED) {
             val pairedDevicesSet: Set<BluetoothDevice>? = bluetoothAdapter?.bondedDevices
             pairedDevicesSet?.forEach { device ->
-                // 假设设备已连接（需要根据具体协议或服务判断）
-                connectedDeviceNames.add(device.name)
+                // 检查设备是否连接到特定服务
+                if (isDeviceConnected(device)) {
+                    connectedDeviceNames.add(device.name)
+                }
             }
         }
+        Log.d("BluetoothMonitor", "Connected devices: ${connectedDeviceNames.size}")
         return connectedDeviceNames
+    }
+
+    private fun isDeviceConnected(device: BluetoothDevice): Boolean {
+        var isConnected = false
+        try {
+            val gatt = device.connectGatt(context, false, object : BluetoothGattCallback() {
+                override fun onConnectionStateChange(gatt: BluetoothGatt?, status: Int, newState: Int) {
+                    if (newState == BluetoothGatt.STATE_CONNECTED) {
+                        isConnected = true
+                        gatt?.disconnect()
+                    }
+                }
+            })
+            gatt?.close()
+        } catch (e: SecurityException) {
+            Log.e("BluetoothMonitor", "Permission error: ${e.message}")
+        }
+        return isConnected
     }
 
     // 清理资源
