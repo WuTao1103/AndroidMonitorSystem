@@ -47,6 +47,8 @@ import android.content.Context
 import android.bluetooth.BluetoothDevice
 import android.content.IntentFilter
 import android.database.ContentObserver
+import android.bluetooth.BluetoothAdapter
+import androidx.compose.foundation.shape.CircleShape
 
 class MainActivity : ComponentActivity() {
     private val customerSpecificEndpoint = "aiier2of1blw9-ats.iot.us-east-1.amazonaws.com"
@@ -167,7 +169,7 @@ class MainActivity : ComponentActivity() {
         ) {
             // Display screen brightness
             Text(
-                text = "Screen Brightness: $brightness",
+                text = "Screen Brightness: $brightness%",
                 modifier = Modifier.padding(bottom = 8.dp)
             )
 
@@ -193,7 +195,7 @@ class MainActivity : ComponentActivity() {
                 modifier = Modifier.padding(bottom = 16.dp)
             )
 
-            // MQTT send button
+            // Existing buttons
             Button(
                 onClick = {
                     // Add a short delay before sending WiFi status
@@ -206,7 +208,6 @@ class MainActivity : ComponentActivity() {
                 Text("Send test message")
             }
 
-            // MQTT reconnect button
             Button(
                 onClick = { connectToAWSIoT() },
                 modifier = Modifier.padding(bottom = 16.dp)
@@ -214,7 +215,33 @@ class MainActivity : ComponentActivity() {
                 Text("Reconnect MQTT")
             }
 
-
+            // New circular buttons row
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceEvenly
+            ) {
+                Button(
+                    onClick = { sendWifiStatusChange(if (isWifiEnabled) "ON" else "OFF", connectedWifiSSID) },
+                    shape = CircleShape,
+                    modifier = Modifier.size(80.dp)
+                ) {
+                    Text("WiFi")
+                }
+                Button(
+                    onClick = { sendBluetoothDeviceChange(if (isBluetoothEnabled) "ON" else "OFF", pairedDevices.size) },
+                    shape = CircleShape,
+                    modifier = Modifier.size(80.dp)
+                ) {
+                    Text("BT")
+                }
+                Button(
+                    onClick = { sendBrightnessChange(brightness) },
+                    shape = CircleShape,
+                    modifier = Modifier.size(80.dp)
+                ) {
+                    Text("Bright")
+                }
+            }
 
             // Debug information display
             Text(
@@ -333,7 +360,7 @@ class MainActivity : ComponentActivity() {
                 val connectedWifiSSID = wifiMonitor.connectedWifiSSID.value ?: "Not connected"
                 val isBluetoothEnabled = bluetoothMonitor.bluetoothState.value ?: false
                 val pairedDevicesCount = bluetoothMonitor.pairedDevices.value?.size ?: 0
-                val brightness = screenBrightnessMonitor.screenBrightness.value ?: -1
+                val brightness = screenBrightnessMonitor.screenBrightness.value ?: 0
 
                 // Create JSON object
                 val statusJson = JSONObject().apply {
@@ -433,7 +460,7 @@ class MainActivity : ComponentActivity() {
 
     fun sendBrightnessChange(screenBrightness: Int) {
         val message = JSONObject().apply {
-            put("screenBrightness", screenBrightness)
+            put("screenBrightness", (screenBrightness*100)/2047)
         }
         if (isConnected) {
             mqttManager.publishString(message.toString(), "AMS/brightness", AWSIotMqttQos.QOS1)
@@ -467,7 +494,7 @@ class MainActivity : ComponentActivity() {
         sendBluetoothDeviceChange(bluetoothStatus, pairedDevicesCount)
 
         // 获取当前屏幕亮度
-        val brightness = Utils.getScreenBrightness(contentResolver)
+        val brightness = screenBrightnessMonitor.screenBrightness.value ?: 0
         sendBrightnessChange(brightness)
     }
 

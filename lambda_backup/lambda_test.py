@@ -21,19 +21,37 @@ def lambda_handler(event, context):
 
     # 使用单表设计，设置分区键和排序键
     partition_key = f"DEVICE#{record_id}"
-    sort_key = f"STATUS#{datetime.now().isoformat()}"
+    timestamp = datetime.now().isoformat()
 
-    # 将数据存储到 DynamoDB
-    response = table.put_item(
+    # 将 WiFi 数据存储到 DynamoDB
+    table.put_item(
         Item={
             'PK': partition_key,
-            'SK': sort_key,
+            'SK': f"WIFI#{timestamp}",
             'wifiStatus': wifi_status,
             'connectedSSID': connected_ssid,
+            'timestamp': timestamp
+        }
+    )
+
+    # 将 Bluetooth 数据存储到 DynamoDB
+    table.put_item(
+        Item={
+            'PK': partition_key,
+            'SK': f"BLUETOOTH#{timestamp}",
             'bluetoothStatus': bluetooth_status,
             'pairedDevicesCount': paired_devices_count,
+            'timestamp': timestamp
+        }
+    )
+
+    # 将 Brightness 数据存储到 DynamoDB
+    table.put_item(
+        Item={
+            'PK': partition_key,
+            'SK': f"BRIGHTNESS#{timestamp}",
             'screenBrightness': screen_brightness,
-            'timestamp': datetime.now().isoformat()
+            'timestamp': timestamp
         }
     )
 
