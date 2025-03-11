@@ -60,4 +60,13 @@ dependencies {
     implementation("com.amazonaws:aws-android-sdk-iot:2.22.+")
     implementation("com.amazonaws:aws-android-sdk-core:2.22.+")
     implementation("org.bouncycastle:bcprov-jdk15on:1.70")
+    testImplementation("junit:junit:4.13.2")
+    testImplementation("org.mockito:mockito-core:4.0.0")
+    testImplementation("org.mockito:mockito-inline:4.0.0")
+    testImplementation("net.bytebuddy:byte-buddy:1.11.22")
+    testImplementation("net.bytebuddy:byte-buddy-agent:1.11.22")
+    testImplementation("org.robolectric:robolectric:4.7.3")
+    androidTestImplementation("androidx.test:core:1.4.0")
+    androidTestImplementation("androidx.test.ext:junit:1.1.3")
+    androidTestImplementation("androidx.test.espresso:espresso-core:3.4.0")
 }
