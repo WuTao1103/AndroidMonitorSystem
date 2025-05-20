@@ -49,6 +49,11 @@ import android.content.IntentFilter
 import android.database.ContentObserver
 import android.bluetooth.BluetoothAdapter
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.material3.Slider
+import androidx.compose.material3.SliderDefaults
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Surface
+import com.example.myapplication.ui.screens.MainScreen
 
 class MainActivity : ComponentActivity() {
     private val customerSpecificEndpoint = "aiier2of1blw9-ats.iot.us-east-1.amazonaws.com"
@@ -86,8 +91,19 @@ class MainActivity : ComponentActivity() {
 
         setContent {
             MyApplicationTheme {
-                Scaffold(modifier = Modifier.fillMaxSize()) { innerPadding ->
-                    MainScreen(innerPadding)
+                Surface {
+                    MainScreen(
+                        bluetoothMonitor = bluetoothMonitor,
+                        wifiMonitor = wifiMonitor,
+                        screenBrightnessMonitor = screenBrightnessMonitor,
+                        sendWifiStatus = { sendWifiStatus() },
+                        connectToAWSIoT = { connectToAWSIoT() },
+                        sendWifiStatusChange = { status, ssid -> sendWifiStatusChange(status, ssid) },
+                        sendBluetoothDeviceChange = { deviceName, status -> sendBluetoothDeviceChange(deviceName, status) },
+                        sendBrightnessChange = { brightness -> sendBrightnessChange(brightness) },
+                        setScreenBrightness = { brightness -> setScreenBrightness(brightness) },
+                        debugMessage = debugMessage
+                    )
                 }
             }
         }
@@ -153,104 +169,6 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    @Composable
-    fun MainScreen(innerPadding: PaddingValues) {
-        val isBluetoothEnabled by bluetoothMonitor.bluetoothState.observeAsState(false)
-        val pairedDevices by bluetoothMonitor.pairedDevices.observeAsState(emptyList())
-        val isWifiEnabled by wifiMonitor.wifiState.observeAsState(false)
-        val connectedWifiSSID by wifiMonitor.connectedWifiSSID.observeAsState("Not connected")
-        val brightness by screenBrightnessMonitor.screenBrightness.observeAsState(-1)
-
-        Column(
-            modifier = Modifier
-                .padding(innerPadding)
-                .fillMaxSize()
-                .padding(16.dp)
-        ) {
-            // Display screen brightness
-            Text(
-                text = "Screen Brightness: $brightness%",
-                modifier = Modifier.padding(bottom = 8.dp)
-            )
-
-            // Bluetooth status display
-            Text(
-                text = if (isBluetoothEnabled) "Bluetooth is turned on" else "Bluetooth is turned off",
-                modifier = Modifier.padding(bottom = 8.dp)
-            )
-
-            // Paired device display
-            Text(
-                text = "Paired device count: ${pairedDevices.size}",
-                modifier = Modifier.padding(bottom = 8.dp)
-            )
-
-            // WiFi status display
-            Text(
-                text = if (isWifiEnabled) "WiFi is turned on" else "WiFi is turned off",
-                modifier = Modifier.padding(bottom = 8.dp)
-            )
-            Text(
-                text = "Current WiFi: $connectedWifiSSID",
-                modifier = Modifier.padding(bottom = 16.dp)
-            )
-
-            // Existing buttons
-            Button(
-                onClick = {
-                    // Add a short delay before sending WiFi status
-                    Handler(Looper.getMainLooper()).postDelayed({
-                        sendWifiStatus()
-                    }, 500)  // 500ms delay
-                },
-                modifier = Modifier.padding(bottom = 16.dp)
-            ) {
-                Text("Send test message")
-            }
-
-            Button(
-                onClick = { connectToAWSIoT() },
-                modifier = Modifier.padding(bottom = 16.dp)
-            ) {
-                Text("Reconnect MQTT")
-            }
-
-            // New circular buttons row
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceEvenly
-            ) {
-                Button(
-                    onClick = { sendWifiStatusChange(if (isWifiEnabled) "ON" else "OFF", connectedWifiSSID) },
-                    shape = CircleShape,
-                    modifier = Modifier.size(80.dp)
-                ) {
-                    Text("WiFi")
-                }
-                Button(
-                    onClick = { sendBluetoothDeviceChange(if (isBluetoothEnabled) "ON" else "OFF", pairedDevices.size) },
-                    shape = CircleShape,
-                    modifier = Modifier.size(80.dp)
-                ) {
-                    Text("BT")
-                }
-                Button(
-                    onClick = { sendBrightnessChange(brightness) },
-                    shape = CircleShape,
-                    modifier = Modifier.size(80.dp)
-                ) {
-                    Text("Bright")
-                }
-            }
-
-            // Debug information display
-            Text(
-                text = debugMessage,
-                modifier = Modifier.padding(top = 16.dp)
-            )
-        }
-    }
-
     private fun connectToAWSIoT() {
         try {
             Log.d("AWS-IoT", "Starting connection...")
@@ -284,27 +202,14 @@ class MainActivity : ComponentActivity() {
                             isConnected = true
                             debugMessage = "MQTT client is connected"
 
-                            // Delay 1 second before subscribing to topic to ensure connection is fully established
-                            Handler(Looper.getMainLooper()).postDelayed({
-                                try {
-                                    mqttManager.subscribeToTopic(
-                                        "sdk/test/java",
-                                        AWSIotMqttQos.QOS1  // Use QOS1 for reliability
-                                    ) { topic, data ->
-                                        val message = String(data)
-                                        Log.d("AWS-IoT", "Received message: $message")
-                                    }
-                                    Log.d("AWS-IoT", "Topic subscription successful")
-                                } catch (e: Exception) {
-                                    Log.e("AWS-IoT", "Failed to subscribe to topic", e)
-                                    // If subscription fails, retry in 3 seconds
-                                    Handler(Looper.getMainLooper()).postDelayed({
-                                        if (isConnected) {
-                                            connectToAWSIoT()
-                                        }
-                                    }, 3000)
-                                }
-                            }, 1000)
+                            // Subscribe to the brightness control topic
+                            mqttManager.subscribeToTopic("AMS/brightness/control", AWSIotMqttQos.QOS1) { topic, data ->
+                                val message = String(data)
+                                Log.d("AWS-IoT", "Received message: $message")
+                                val json = JSONObject(message)
+                                val brightness = json.getInt("screenBrightness")
+                                setScreenBrightness(brightness)
+                            }
                         }
                         AWSIotMqttClientStatusCallback.AWSIotMqttClientStatus.ConnectionLost -> {
                             Log.e("AWS-IoT", "Connection lost")
@@ -335,6 +240,11 @@ class MainActivity : ComponentActivity() {
             debugMessage = "Connection error: ${e.message}"
             e.printStackTrace()
         }
+    }
+
+    fun setScreenBrightness(brightness: Int) {
+        val brightnessValue = (brightness * 2047) / 100 // Convert percentage to system brightness value
+        Settings.System.putInt(contentResolver, Settings.System.SCREEN_BRIGHTNESS, brightnessValue)
     }
 
     // Modify the send message function to use QOS1
@@ -460,7 +370,7 @@ class MainActivity : ComponentActivity() {
 
     fun sendBrightnessChange(screenBrightness: Int) {
         val message = JSONObject().apply {
-            put("screenBrightness", (screenBrightness*100)/2047)
+            put("screenBrightness", screenBrightness)
         }
         if (isConnected) {
             mqttManager.publishString(message.toString(), "AMS/brightness", AWSIotMqttQos.QOS1)
