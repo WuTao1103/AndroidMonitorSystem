@@ -70,4 +70,5 @@ dependencies {
     androidTestImplementation("androidx.test.ext:junit:1.1.3")
     androidTestImplementation("androidx.test.espresso:espresso-core:3.4.0")
     implementation("androidx.compose.runtime:runtime-livedata:1.0.0")
+    implementation("androidx.compose.material:material-icons-extended")
 }

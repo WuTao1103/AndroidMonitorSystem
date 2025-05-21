@@ -48,6 +48,10 @@ import android.bluetooth.BluetoothDevice
 import android.content.IntentFilter
 import android.database.ContentObserver
 import android.bluetooth.BluetoothAdapter
+import android.net.ConnectivityManager
+import android.net.Network
+import android.net.NetworkCapabilities
+import android.net.NetworkRequest
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material3.Slider
 import androidx.compose.material3.SliderDefaults
@@ -57,10 +61,9 @@ import com.example.myapplication.ui.screens.MainScreen
 
 class MainActivity : ComponentActivity() {
     private val customerSpecificEndpoint = "aiier2of1blw9-ats.iot.us-east-1.amazonaws.com"
-    private val clientId = "android-device-${System.currentTimeMillis()}"  // Use a unique client ID
     private lateinit var mqttManager: AWSIotMqttManager
     private var isConnected = false
-    private var debugMessage by mutableStateOf("Connecting...")
+    private var debugMessage by mutableStateOf("正在连接...")
 
     private lateinit var bluetoothMonitor: BluetoothMonitor
     private lateinit var wifiMonitor: WifiMonitor
@@ -74,19 +77,26 @@ class MainActivity : ComponentActivity() {
 
     private lateinit var brightnessObserver: BrightnessObserver
 
+    // 用于网络监控的回调
+    private lateinit var networkCallback: ConnectivityManager.NetworkCallback
+
+    // 用于控制发送消息频率的变量
+    private var lastMessageTime = 0L
+    private val messageCooldown = 2000 // 2秒冷却时间
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         Log.d("MainActivity", "onCreate called")
         enableEdgeToEdge()
 
-        // Request necessary permissions
+        // 请求必要的权限
         requestPermissions()
 
-        // Initialize Bluetooth and WiFi monitors
+        // 初始化蓝牙和WiFi监视器
         bluetoothMonitor = BluetoothMonitor(this)
         wifiMonitor = WifiMonitor(this)
 
-        // Initialize ScreenBrightnessMonitor
+        // 初始化屏幕亮度监视器
         screenBrightnessMonitor = ScreenBrightnessMonitor(this)
 
         setContent {
@@ -108,35 +118,42 @@ class MainActivity : ComponentActivity() {
             }
         }
 
-        copyFilesToInternalStorage()
+        // 复制证书文件并处理错误情况
+        prepareAssetFiles()
+
+        // 注册网络状态变化监听
+        registerNetworkCallback()
+
+        // 连接到AWS IoT
         connectToAWSIoT()
 
         val brightness = Utils.getScreenBrightness(contentResolver)
-        Log.d("ScreenBrightness", "Current screen brightness: $brightness")
+        Log.d("ScreenBrightness", "当前屏幕亮度: $brightness")
 
+        // 请求写入设置权限
         if (!Settings.System.canWrite(this)) {
             val intent = Intent(Settings.ACTION_MANAGE_WRITE_SETTINGS)
             intent.data = Uri.parse("package:$packageName")
             startActivity(intent)
         }
 
-        // Register WiFi state receiver
+        // 注册WiFi状态接收器
         wifiReceiver = WifiStateReceiver { status, ssid ->
-            sendWifiStatusChange(status, ssid)
+            sendWifiStatusChangeSafely(status, ssid)
         }
         registerReceiver(wifiReceiver, IntentFilter(WifiManager.NETWORK_STATE_CHANGED_ACTION))
 
-        // Register Bluetooth device receiver
+        // 注册蓝牙设备接收器
         bluetoothReceiver = BluetoothDeviceReceiver { deviceName, status ->
-            sendBluetoothDeviceChange(deviceName, status)
+            sendBluetoothDeviceChangeSafely(deviceName, status)
         }
         registerReceiver(bluetoothReceiver, IntentFilter(BluetoothDevice.ACTION_ACL_CONNECTED))
         registerReceiver(bluetoothReceiver, IntentFilter(BluetoothDevice.ACTION_ACL_DISCONNECTED))
 
-        // Register brightness change listener
+        // 注册亮度变化监听器
         val handler = Handler(Looper.getMainLooper())
         brightnessObserver = BrightnessObserver(this, handler) { brightness ->
-            sendBrightnessChange(brightness)
+            sendBrightnessChangeSafely(brightness)
         }
         contentResolver.registerContentObserver(
             Settings.System.getUriFor(Settings.System.SCREEN_BRIGHTNESS),
@@ -144,8 +161,10 @@ class MainActivity : ComponentActivity() {
             brightnessObserver
         )
 
-        // 发送初始状态
-        sendInitialStatus()
+        // 延迟发送初始状态，确保连接稳定
+        Handler(Looper.getMainLooper()).postDelayed({
+            sendInitialStatus()
+        }, 5000)
     }
 
     private fun requestPermissions() {
@@ -158,256 +177,453 @@ class MainActivity : ComponentActivity() {
             Manifest.permission.ACCESS_NETWORK_STATE
         )
 
-        if (!permissions.all {
-                ActivityCompat.checkSelfPermission(this, it) == PackageManager.PERMISSION_GRANTED
-            }) {
-            ActivityCompat.requestPermissions(this, permissions, 1)
-        }
+        val permissionsToRequest = permissions.filter {
+            ActivityCompat.checkSelfPermission(this, it) != PackageManager.PERMISSION_GRANTED
+        }.toTypedArray()
 
-        if (ActivityCompat.checkSelfPermission(this, Manifest.permission.BLUETOOTH_CONNECT) != PackageManager.PERMISSION_GRANTED) {
-            ActivityCompat.requestPermissions(this, arrayOf(Manifest.permission.BLUETOOTH_CONNECT), 1)
+        if (permissionsToRequest.isNotEmpty()) {
+            ActivityCompat.requestPermissions(this, permissionsToRequest, 1)
         }
     }
 
     private fun connectToAWSIoT() {
         try {
-            Log.d("AWS-IoT", "Starting connection...")
-            mqttManager = AWSIotMqttManager("sdk-java", customerSpecificEndpoint)
+            Log.d("AWS-IoT", "开始连接...")
+            debugMessage = "正在连接AWS IoT..."
 
-            // Configure connection parameters
-            mqttManager.setKeepAlive(600)  // Increase keep-alive time to 600 seconds
+            // 使用设备唯一ID作为客户端ID的一部分，避免冲突
+            val deviceId = Settings.Secure.getString(contentResolver, Settings.Secure.ANDROID_ID)
+            val clientId = "android-device-$deviceId"
+
+            // 检查证书文件是否存在
+            val certFile = File(filesDir, "cc9.cert.pem")
+            val keyFile = File(filesDir, "cc9.private.key")
+            val rootCAFile = File(filesDir, "root-CA.crt")
+
+            if (!certFile.exists() || !keyFile.exists() || !rootCAFile.exists()) {
+                Log.e("AWS-IoT", "证书文件缺失，尝试重新复制")
+                prepareAssetFiles()
+                // 如果文件仍然不存在，则退出
+                if (!certFile.exists() || !keyFile.exists() || !rootCAFile.exists()) {
+                    debugMessage = "证书文件不存在，无法连接AWS IoT"
+                    Log.e("AWS-IoT", "证书文件缺失")
+                    return
+                }
+            }
+
+            mqttManager = AWSIotMqttManager(clientId, customerSpecificEndpoint)
+
+            // 修改连接参数
+            mqttManager.setKeepAlive(30)  // 降低为30秒
             mqttManager.setAutoReconnect(true)
-            mqttManager.setCleanSession(false)  // Use persistent session
-            mqttManager.setMaxAutoReconnectAttempts(10)
-            mqttManager.setReconnectRetryLimits(1000, 128000)
-            mqttManager.setOfflinePublishQueueEnabled(true)
+            mqttManager.setCleanSession(true)  // 使用干净会话
+            mqttManager.setMaxAutoReconnectAttempts(5)
+            mqttManager.setReconnectRetryLimits(1000, 30000)  // 最大30秒重连间隔
+            mqttManager.setOfflinePublishQueueEnabled(true)  // 启用离线队列
 
-            // Convert certificate format
+            // 转换证书
             val keyStore = Utils.convertPemToPkcs12(filesDir)
 
-            // Configure SSL context
+            // 配置SSL上下文
             val password = "temp".toCharArray()
-            val sslContext = SSLContext.getInstance("TLS")
             val kmf = KeyManagerFactory.getInstance(KeyManagerFactory.getDefaultAlgorithm())
             kmf.init(keyStore, password)
-            sslContext.init(kmf.keyManagers, null, null)
 
-            Log.d("AWS-IoT", "Starting MQTT connection...")
+            Log.d("AWS-IoT", "开始MQTT连接...")
 
             mqttManager.connect(keyStore) { status, throwable ->
                 runOnUiThread {
                     when (status) {
                         AWSIotMqttClientStatusCallback.AWSIotMqttClientStatus.Connected -> {
-                            Log.d("AWS-IoT", "Connection successful")
+                            Log.d("AWS-IoT", "连接成功")
                             isConnected = true
-                            debugMessage = "MQTT client is connected"
+                            debugMessage = "MQTT客户端已连接"
+                            connectionAttempts = 0
 
-                            // Subscribe to the brightness control topic
-                            mqttManager.subscribeToTopic("AMS/brightness/control", AWSIotMqttQos.QOS1) { topic, data ->
-                                val message = String(data)
-                                Log.d("AWS-IoT", "Received message: $message")
-                                val json = JSONObject(message)
-                                val brightness = json.getInt("screenBrightness")
-                                setScreenBrightness(brightness)
-                            }
+                            // 延迟订阅主题
+                            delayedSubscribeToTopics()
+
+                            // 发送简单的连接状态消息
+                            Handler(Looper.getMainLooper()).postDelayed({
+                                try {
+                                    if (isConnected) {
+                                        mqttManager.publishString(
+                                            "{\"status\":\"connected\",\"deviceId\":\"$deviceId\"}",
+                                            "AMS/device/status",
+                                            AWSIotMqttQos.QOS0
+                                        )
+                                        Log.d("AWS-IoT", "发送连接状态消息成功")
+                                    }
+                                } catch (e: Exception) {
+                                    Log.e("AWS-IoT", "发送连接状态消息失败", e)
+                                }
+                            }, 2000)  // 等待2秒后发送
                         }
                         AWSIotMqttClientStatusCallback.AWSIotMqttClientStatus.ConnectionLost -> {
-                            Log.e("AWS-IoT", "Connection lost")
+                            Log.e("AWS-IoT", "连接丢失", throwable)
                             isConnected = false
-                            debugMessage = "MQTT connection lost: ${throwable?.message}"
+                            debugMessage = "MQTT连接丢失: ${throwable?.message}"
 
-                            // Wait 3 seconds before trying to reconnect
+                            // 增加重连间隔，避免频繁重连
+                            val reconnectDelay = (Math.min(connectionAttempts, 5) * 1000 + 3000).toLong()
+                            connectionAttempts++
+
+                            // 延迟重连
                             Handler(Looper.getMainLooper()).postDelayed({
                                 if (!isConnected) {
                                     connectToAWSIoT()
                                 }
-                            }, 3000)
+                            }, reconnectDelay)
                         }
                         AWSIotMqttClientStatusCallback.AWSIotMqttClientStatus.Reconnecting -> {
-                            Log.w("AWS-IoT", "Reconnecting", throwable)
-                            debugMessage = "Reconnecting..."
+                            Log.w("AWS-IoT", "重新连接中", throwable)
+                            debugMessage = "正在重新连接..."
                         }
                         else -> {
-                            Log.e("AWS-IoT", "Connection failed: $status", throwable)
-                            debugMessage = "Connection failed: ${throwable?.message}"
+                            Log.e("AWS-IoT", "连接失败: $status", throwable)
+                            debugMessage = "连接失败: ${throwable?.message}"
+
+                            // 3秒后重试
+                            Handler(Looper.getMainLooper()).postDelayed({
+                                if (!isConnected && connectionAttempts < maxConnectionAttempts) {
+                                    connectionAttempts++
+                                    connectToAWSIoT()
+                                }
+                            }, 3000)
                         }
                     }
                 }
             }
-
         } catch (e: Exception) {
-            Log.e("AWS-IoT", "Error during connection", e)
-            debugMessage = "Connection error: ${e.message}"
+            Log.e("AWS-IoT", "连接过程中出错", e)
+            debugMessage = "连接错误: ${e.message}"
             e.printStackTrace()
+
+            // 5秒后重试
+            Handler(Looper.getMainLooper()).postDelayed({
+                if (!isConnected && connectionAttempts < maxConnectionAttempts) {
+                    connectionAttempts++
+                    connectToAWSIoT()
+                }
+            }, 5000)
         }
+    }
+
+    private fun delayedSubscribeToTopics() {
+        Handler(Looper.getMainLooper()).postDelayed({
+            if (isConnected) {
+                try {
+                    // 使用QOS0订阅主题，降低复杂性
+                    mqttManager.subscribeToTopic("AMS/brightness/control", AWSIotMqttQos.QOS0) { topic, data ->
+                        try {
+                            val message = String(data)
+                            Log.d("AWS-IoT", "接收到消息: $message")
+                            val json = JSONObject(message)
+                            val brightness = json.getInt("screenBrightness")
+                            runOnUiThread {
+                                setScreenBrightness(brightness)
+                            }
+                        } catch (e: Exception) {
+                            Log.e("AWS-IoT", "处理消息时出错", e)
+                        }
+                    }
+                    Log.d("AWS-IoT", "成功订阅亮度控制主题")
+                } catch (e: Exception) {
+                    Log.e("AWS-IoT", "订阅主题失败", e)
+                }
+            }
+        }, 3000)  // 等待3秒后再订阅
+    }
+
+    private fun registerNetworkCallback() {
+        val connectivityManager = getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
+        networkCallback = object : ConnectivityManager.NetworkCallback() {
+            override fun onAvailable(network: Network) {
+                Log.d("NetworkMonitor", "网络可用")
+                if (!isConnected) {
+                    Handler(Looper.getMainLooper()).postDelayed({
+                        runOnUiThread {
+                            connectToAWSIoT()
+                        }
+                    }, 2000)  // 等待2秒确保网络稳定
+                }
+            }
+
+            override fun onLost(network: Network) {
+                Log.d("NetworkMonitor", "网络丢失")
+                runOnUiThread {
+                    isConnected = false
+                    debugMessage = "网络连接丢失"
+                }
+            }
+
+            override fun onCapabilitiesChanged(network: Network, capabilities: NetworkCapabilities) {
+                val hasInternet = capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
+                Log.d("NetworkMonitor", "网络能力变化，互联网连接: $hasInternet")
+            }
+        }
+
+        val request = NetworkRequest.Builder()
+            .addCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
+            .build()
+
+        connectivityManager.registerNetworkCallback(request, networkCallback)
     }
 
     fun setScreenBrightness(brightness: Int) {
-        val brightnessValue = (brightness * 2047) / 100 // Convert percentage to system brightness value
-        Settings.System.putInt(contentResolver, Settings.System.SCREEN_BRIGHTNESS, brightnessValue)
-    }
-
-    // Modify the send message function to use QOS1
-    private fun sendMessage(message: String) {
         try {
-            if (isConnected) {
-                mqttManager.publishString(message, "sdk/test/java", AWSIotMqttQos.QOS1)
-                Log.d("AWS-IoT", "Message sent successfully: $message")
+            val brightnessValue = (brightness * 2047) / 100 // 将百分比转换为系统亮度值
+            if (Settings.System.canWrite(this)) {
+                Settings.System.putInt(contentResolver, Settings.System.SCREEN_BRIGHTNESS, brightnessValue)
+                Log.d("ScreenBrightness", "亮度已设置为: $brightness%")
             } else {
-                debugMessage = "MQTT client is not connected."
-                Log.w("AWS-IoT", "MQTT not connected, unable to send message")
+                Log.e("ScreenBrightness", "没有写入设置的权限")
+                debugMessage = "无法设置亮度：需要写入设置的权限"
             }
         } catch (e: Exception) {
-            debugMessage = "Error sending message: ${e.message}"
-            Log.e("AWS-IoT", "Failed to send message", e)
+            Log.e("ScreenBrightness", "设置亮度失败", e)
+        }
+    }
+
+    // 安全发送消息，包含频率控制和错误处理
+    private fun sendMessageSafely(message: String, topic: String) {
+        try {
+            val currentTime = System.currentTimeMillis()
+            if (isConnected && currentTime - lastMessageTime > messageCooldown) {
+                mqttManager.publishString(message, topic, AWSIotMqttQos.QOS0)
+                lastMessageTime = currentTime
+                Log.d("AWS-IoT", "消息发送成功: $message to $topic")
+            } else if (!isConnected) {
+                Log.w("AWS-IoT", "MQTT未连接，无法发送消息")
+            } else {
+                Log.d("AWS-IoT", "消息发送频率过高，跳过")
+            }
+        } catch (e: Exception) {
+            Log.e("AWS-IoT", "发送消息失败", e)
             e.printStackTrace()
         }
     }
+
     private fun sendWifiStatus() {
         try {
             if (isConnected) {
                 val isWifiEnabled = wifiMonitor.wifiState.value ?: false
-                val connectedWifiSSID = wifiMonitor.connectedWifiSSID.value ?: "Not connected"
+                val connectedWifiSSID = wifiMonitor.connectedWifiSSID.value ?: "未连接"
                 val isBluetoothEnabled = bluetoothMonitor.bluetoothState.value ?: false
                 val pairedDevicesCount = bluetoothMonitor.pairedDevices.value?.size ?: 0
                 val brightness = screenBrightnessMonitor.screenBrightness.value ?: 0
 
-                // Create JSON object
+                // 创建JSON对象
                 val statusJson = JSONObject().apply {
                     put("wifiStatus", if (isWifiEnabled) "ON" else "OFF")
                     put("connectedSSID", connectedWifiSSID)
                     put("bluetoothStatus", if (isBluetoothEnabled) "ON" else "OFF")
                     put("pairedDevicesCount", pairedDevicesCount)
                     put("screenBrightness", brightness)
+                    put("timestamp", System.currentTimeMillis())
                 }
 
-                // Convert JSON object to string
+                // 转换JSON对象为字符串
                 val statusMessage = statusJson.toString()
 
-                mqttManager.publishString(
-                    statusMessage,
-                    "sdk/test/java",  // Use the same topic
-                    AWSIotMqttQos.QOS1  // Use the same QoS level
-                )
-                Log.d("AWS-IoT", "Status sent: $statusMessage")
+                sendMessageSafely(statusMessage, "AMS/device/status")
             } else {
-                debugMessage = "MQTT client is not connected."
-                Log.w("AWS-IoT", "MQTT not connected, unable to send status")
+                debugMessage = "MQTT客户端未连接"
+                Log.w("AWS-IoT", "MQTT未连接，无法发送状态")
             }
         } catch (e: Exception) {
-            debugMessage = "Error sending status: ${e.message}"
-            Log.e("AWS-IoT", "Error sending status", e)
+            debugMessage = "发送状态错误: ${e.message}"
+            Log.e("AWS-IoT", "发送状态时出错", e)
             e.printStackTrace()
         }
     }
-    private fun copyFilesToInternalStorage() {
-        val assetManager = assets
-        val filesToCopy = listOf(
-            "cc9.cert.pem",
-            "cc9.private.key",
-            "root-CA.crt"
-        )
 
-        for (fileName in filesToCopy) {
-            try {
-                val inputStream = assetManager.open(fileName)
-                val outputFile = File(filesDir, fileName)
+    private fun prepareAssetFiles() {
+        // 创建assets目录用于存放自定义文件
+        val certificateDir = File(filesDir, "certificates")
+        if (!certificateDir.exists()) {
+            certificateDir.mkdirs()
+        }
 
-                // Delete the file if it already exists
-                if (outputFile.exists()) {
-                    outputFile.delete()
-                    Log.d("FileCopy", "Deleted existing file: $fileName")
+        // 如果找不到证书文件，创建默认的空文件
+        // 实际开发中，这些文件应从AWS IoT控制台下载
+        val certFile = File(filesDir, "cc9.cert.pem")
+        val keyFile = File(filesDir, "cc9.private.key")
+        val rootCAFile = File(filesDir, "root-CA.crt")
+
+        try {
+            // 尝试从assets复制
+            val assetManager = assets
+            val filesToCopy = listOf(
+                "cc9.cert.pem",
+                "cc9.private.key",
+                "root-CA.crt"
+            )
+
+            for (fileName in filesToCopy) {
+                try {
+                    val inputStream = assetManager.open(fileName)
+                    val outputFile = File(filesDir, fileName)
+
+                    // 如果文件已存在则删除
+                    if (outputFile.exists()) {
+                        outputFile.delete()
+                        Log.d("FileCopy", "删除已存在的文件: $fileName")
+                    }
+
+                    val outputStream = outputFile.outputStream()
+                    inputStream.copyTo(outputStream)
+                    inputStream.close()
+                    outputStream.close()
+
+                    Log.d("FileCopy", "成功复制文件 $fileName (${outputFile.length()} 字节)")
+                } catch (e: Exception) {
+                    Log.e("FileCopy", "复制文件失败: $fileName", e)
+                    debugMessage = "文件复制错误: $fileName - ${e.message}"
+
+                    // 创建空文件便于调试
+                    if (!File(filesDir, fileName).exists()) {
+                        File(filesDir, fileName).createNewFile()
+                        Log.d("FileCopy", "创建空文件: $fileName")
+                    }
                 }
-
-                val outputStream = outputFile.outputStream()
-                inputStream.copyTo(outputStream)
-                inputStream.close()
-                outputStream.close()
-
-                Log.d("FileCopy", "Successfully copied file $fileName (${outputFile.length()} bytes)")
-            } catch (e: Exception) {
-                Log.e("FileCopy", "Failed to copy file: $fileName", e)
-                debugMessage = "File copy error: $fileName - ${e.message}"
             }
+        } catch (e: Exception) {
+            Log.e("FileCopy", "文件处理过程中出错", e)
+            debugMessage = "文件处理错误: ${e.message}"
         }
     }
 
     override fun onDestroy() {
         super.onDestroy()
-        // Disconnect MQTT
+        // 断开MQTT连接
         if (::mqttManager.isInitialized) {
             try {
                 mqttManager.disconnect()
+                Log.d("AWS-IoT", "MQTT连接已断开")
             } catch (e: Exception) {
-                Log.e("AWS-IoT", "Error disconnecting MQTT", e)
+                Log.e("AWS-IoT", "断开MQTT连接时出错", e)
             }
         }
-        // Clean up Bluetooth resources
+
+        // 清理蓝牙资源
         bluetoothMonitor.cleanup()
-        unregisterReceiver(wifiReceiver)
-        unregisterReceiver(bluetoothReceiver)
+
+        // 注销广播接收器
+        try {
+            unregisterReceiver(wifiReceiver)
+            unregisterReceiver(bluetoothReceiver)
+        } catch (e: Exception) {
+            Log.e("MainActivity", "注销接收器时出错", e)
+        }
+
+        // 注销内容观察器
+        try {
+            contentResolver.unregisterContentObserver(brightnessObserver)
+        } catch (e: Exception) {
+            Log.e("MainActivity", "注销内容观察器时出错", e)
+        }
+
+        // 注销网络回调
+        try {
+            val connectivityManager = getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
+            connectivityManager.unregisterNetworkCallback(networkCallback)
+        } catch (e: Exception) {
+            Log.e("MainActivity", "注销网络回调时出错", e)
+        }
     }
 
-    fun sendWifiStatusChange(wifiStatus: String, connectedSSID: String) {
+    // 安全发送WiFi状态变化
+    private fun sendWifiStatusChangeSafely(wifiStatus: String, connectedSSID: String) {
         val message = JSONObject().apply {
             put("wifiStatus", wifiStatus)
             put("connectedSSID", connectedSSID)
+            put("timestamp", System.currentTimeMillis())
         }
-        if (isConnected) {
-            mqttManager.publishString(message.toString(), "AMS/wifi", AWSIotMqttQos.QOS1)
-        } else {
-            Log.e("MainActivity", "MQTT client is not connected")
-        }
+        sendMessageSafely(message.toString(), "AMS/wifi")
     }
 
-    fun sendBluetoothDeviceChange(deviceName: String, status: String) {
+    // 公开方法，供UI调用
+    fun sendWifiStatusChange(wifiStatus: String, connectedSSID: String) {
+        sendWifiStatusChangeSafely(wifiStatus, connectedSSID)
+    }
+
+    // 安全发送蓝牙设备变化
+    private fun sendBluetoothDeviceChangeSafely(deviceName: String, status: String) {
         val message = JSONObject().apply {
             put("deviceName", deviceName)
             put("status", status)
+            put("timestamp", System.currentTimeMillis())
         }
-        mqttManager.publishString(message.toString(), "AMS/bluetooth", AWSIotMqttQos.QOS1)
+        sendMessageSafely(message.toString(), "AMS/bluetooth")
     }
 
-    fun sendBrightnessChange(screenBrightness: Int) {
+    // 公开方法，供UI调用
+    fun sendBluetoothDeviceChange(deviceName: String, status: String) {
+        sendBluetoothDeviceChangeSafely(deviceName, status)
+    }
+
+    // 安全发送亮度变化
+    private fun sendBrightnessChangeSafely(screenBrightness: Int) {
         val message = JSONObject().apply {
             put("screenBrightness", screenBrightness)
+            put("timestamp", System.currentTimeMillis())
         }
-        if (isConnected) {
-            mqttManager.publishString(message.toString(), "AMS/brightness", AWSIotMqttQos.QOS1)
-        } else {
-            Log.e("MainActivity", "MQTT client is not connected")
-        }
+        sendMessageSafely(message.toString(), "AMS/brightness")
     }
 
+    // 公开方法，供UI调用
+    fun sendBrightnessChange(screenBrightness: Int) {
+        sendBrightnessChangeSafely(screenBrightness)
+    }
+
+    // 发送蓝牙状态变化
     fun sendBluetoothDeviceChange(bluetoothStatus: String, pairedDevicesCount: Int) {
         val message = JSONObject().apply {
             put("bluetoothStatus", bluetoothStatus)
             put("pairedDevicesCount", pairedDevicesCount)
+            put("timestamp", System.currentTimeMillis())
         }
-        if (isConnected) {
-            mqttManager.publishString(message.toString(), "AMS/bluetooth", AWSIotMqttQos.QOS1)
-        } else {
-            Log.e("MainActivity", "MQTT client is not connected")
-        }
+        sendMessageSafely(message.toString(), "AMS/bluetooth")
     }
 
+    // 发送初始状态
     private fun sendInitialStatus() {
-        // 获取当前 WiFi 状态
-        val wifiManager = applicationContext.getSystemService(Context.WIFI_SERVICE) as WifiManager
-        val wifiStatus = if (wifiManager.isWifiEnabled) "ON" else "OFF"
-        val connectedSSID = wifiManager.connectionInfo.ssid ?: "Unknown"
-        sendWifiStatusChange(wifiStatus, connectedSSID)
+        try {
+            // 获取当前WiFi状态
+            val wifiManager = applicationContext.getSystemService(Context.WIFI_SERVICE) as WifiManager
+            val wifiStatus = if (wifiManager.isWifiEnabled) "ON" else "OFF"
+            val connectedSSID = wifiManager.connectionInfo.ssid ?: "未知"
 
-        // 获取当前蓝牙状态
-        val bluetoothStatus = if (bluetoothMonitor.bluetoothState.value == true) "ON" else "OFF"
-        val pairedDevicesCount = bluetoothMonitor.pairedDevices.value?.size ?: 0
-        sendBluetoothDeviceChange(bluetoothStatus, pairedDevicesCount)
+            // 获取当前蓝牙状态
+            val bluetoothStatus = if (bluetoothMonitor.bluetoothState.value == true) "ON" else "OFF"
+            val pairedDevicesCount = bluetoothMonitor.pairedDevices.value?.size ?: 0
 
-        // 获取当前屏幕亮度
-        val brightness = screenBrightnessMonitor.screenBrightness.value ?: 0
-        sendBrightnessChange(brightness)
+            // 获取当前屏幕亮度
+            val brightness = screenBrightnessMonitor.screenBrightness.value ?: 0
+
+            // 创建初始化状态JSON
+            val initJson = JSONObject().apply {
+                put("wifiStatus", wifiStatus)
+                put("connectedSSID", connectedSSID)
+                put("bluetoothStatus", bluetoothStatus)
+                put("pairedDevicesCount", pairedDevicesCount)
+                put("screenBrightness", brightness)
+                put("isInitialStatus", true)
+                put("timestamp", System.currentTimeMillis())
+            }
+
+            // 发送初始化状态
+            if (isConnected) {
+                sendMessageSafely(initJson.toString(), "AMS/device/init")
+                Log.d("MainActivity", "已发送初始状态")
+            } else {
+                Log.d("MainActivity", "MQTT未连接，未能发送初始状态")
+            }
+        } catch (e: Exception) {
+            Log.e("MainActivity", "发送初始状态时出错", e)
+        }
     }
-
 }
 
 class WifiStateReceiver(private val onWifiStateChanged: (String, String) -> Unit) : BroadcastReceiver() {
@@ -415,11 +631,11 @@ class WifiStateReceiver(private val onWifiStateChanged: (String, String) -> Unit
         if (intent?.action == WifiManager.NETWORK_STATE_CHANGED_ACTION) {
             val networkInfo = intent.getParcelableExtra<NetworkInfo>(WifiManager.EXTRA_NETWORK_INFO)
             val wifiManager = context?.applicationContext?.getSystemService(Context.WIFI_SERVICE) as WifiManager
-            val connectedSSID = wifiManager.connectionInfo.ssid ?: "Unknown"
+            val connectedSSID = wifiManager.connectionInfo.ssid ?: "未知"
             if (networkInfo?.isConnected == true) {
                 onWifiStateChanged("Connected", connectedSSID)
             } else {
-                onWifiStateChanged("Disconnected", "Not connected")
+                onWifiStateChanged("Disconnected", "未连接")
             }
         }
     }
@@ -431,13 +647,13 @@ class BluetoothDeviceReceiver(private val onBluetoothDeviceChanged: (String, Str
             BluetoothDevice.ACTION_ACL_CONNECTED -> {
                 val device = intent.getParcelableExtra<BluetoothDevice>(BluetoothDevice.EXTRA_DEVICE)
                 device?.let {
-                    onBluetoothDeviceChanged(it.name ?: "Unknown", "Connected")
+                    onBluetoothDeviceChanged(it.name ?: "未知设备", "Connected")
                 }
             }
             BluetoothDevice.ACTION_ACL_DISCONNECTED -> {
                 val device = intent.getParcelableExtra<BluetoothDevice>(BluetoothDevice.EXTRA_DEVICE)
                 device?.let {
-                    onBluetoothDeviceChanged(it.name ?: "Unknown", "Disconnected")
+                    onBluetoothDeviceChanged(it.name ?: "未知设备", "Disconnected")
                 }
             }
         }
@@ -451,7 +667,12 @@ class BrightnessObserver(
 ) : ContentObserver(handler) {
     override fun onChange(selfChange: Boolean) {
         super.onChange(selfChange)
-        val brightness = Settings.System.getInt(context.contentResolver, Settings.System.SCREEN_BRIGHTNESS, -1)
-        onBrightnessChanged(brightness)
+        try {
+            val brightness = Settings.System.getInt(context.contentResolver, Settings.System.SCREEN_BRIGHTNESS, -1)
+            val normalizedBrightness = (brightness * 100) / 2047  // 归一化为百分比
+            onBrightnessChanged(normalizedBrightness)
+        } catch (e: Exception) {
+            Log.e("BrightnessObserver", "获取亮度失败", e)
+        }
     }
 }
