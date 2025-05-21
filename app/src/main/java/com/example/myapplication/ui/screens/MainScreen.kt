@@ -58,32 +58,32 @@ fun MainScreen(
     val isBluetoothEnabled by bluetoothMonitor.bluetoothState.observeAsState(false)
     val pairedDevices by bluetoothMonitor.pairedDevices.observeAsState(emptyList())
     val isWifiEnabled by wifiMonitor.wifiState.observeAsState(false)
-    val connectedWifiSSID by wifiMonitor.connectedWifiSSID.observeAsState("未连接")
+    val connectedWifiSSID by wifiMonitor.connectedWifiSSID.observeAsState("Not connected")
     val brightness by screenBrightnessMonitor.screenBrightness.observeAsState(0)
 
     var sliderPosition by remember { mutableStateOf(0f) }
     var showConnectionDetails by remember { mutableStateOf(false) }
     var showSettings by remember { mutableStateOf(false) }
 
-    // 当亮度值发生变化时更新滑块位置
+    // Update slider position when brightness changes
     LaunchedEffect(brightness) {
         sliderPosition = brightness.toFloat()
     }
 
-    // 创建状态指示器的动画
-    val connectionIndicatorColor = if (debugMessage.contains("已连接")) {
-        Color(0xFF4CAF50) // 绿色表示已连接
-    } else if (debugMessage.contains("正在")) {
-        Color(0xFFFFA000) // 黄色表示连接中
+    // Create status indicator animation
+    val connectionIndicatorColor = if (debugMessage.contains("connected")) {
+        Color(0xFF4CAF50) // Green for connected
+    } else if (debugMessage.contains("connecting")) {
+        Color(0xFFFFA000) // Yellow for connecting
     } else {
-        Color(0xFFF44336) // 红色表示未连接或错误
+        Color(0xFFF44336) // Red for disconnected or error
     }
 
-    // 连接指示器动画
+    // Connection indicator animation
     val infiniteTransition = rememberInfiniteTransition()
     val indicatorAlpha by infiniteTransition.animateFloat(
-        initialValue = if (debugMessage.contains("正在")) 0.4f else 0.8f,
-        targetValue = if (debugMessage.contains("正在")) 0.8f else 0.8f,
+        initialValue = if (debugMessage.contains("connecting")) 0.4f else 0.8f,
+        targetValue = if (debugMessage.contains("connecting")) 0.8f else 0.8f,
         animationSpec = infiniteRepeatable(
             animation = tween(1000),
             repeatMode = RepeatMode.Reverse
@@ -97,7 +97,7 @@ fun MainScreen(
             .padding(16.dp),
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
-        // 标题和连接状态
+        // Title and connection status
         Card(
             modifier = Modifier
                 .fillMaxWidth()
@@ -116,13 +116,13 @@ fun MainScreen(
                     modifier = Modifier.fillMaxWidth()
                 ) {
                     Text(
-                        text = "安卓设备监控",
+                        text = "Android Device Monitor",
                         fontSize = 20.sp,
                         fontWeight = FontWeight.Bold,
                         modifier = Modifier.weight(1f)
                     )
 
-                    // 连接状态指示器
+                    // Connection status indicator
                     Box(
                         modifier = Modifier
                             .size(16.dp)
@@ -135,7 +135,7 @@ fun MainScreen(
                     )
                 }
 
-                // 连接状态详情
+                // Connection status details
                 AnimatedVisibility(
                     visible = showConnectionDetails,
                     enter = fadeIn() + expandVertically(),
@@ -154,7 +154,7 @@ fun MainScreen(
             }
         }
 
-        // 设备状态卡片
+        // Device status card
         DeviceStatusCard(
             isBluetoothEnabled = isBluetoothEnabled,
             pairedDevicesCount = pairedDevices.size,
@@ -166,7 +166,7 @@ fun MainScreen(
                 .padding(bottom = 16.dp)
         )
 
-        // 亮度控制卡片
+        // Brightness control card
         Card(
             modifier = Modifier
                 .fillMaxWidth()
@@ -180,20 +180,20 @@ fun MainScreen(
                 modifier = Modifier.padding(16.dp)
             ) {
                 Text(
-                    text = "屏幕亮度控制",
+                    text = "Screen Brightness Control",
                     fontSize = 16.sp,
                     fontWeight = FontWeight.Bold,
                     modifier = Modifier.padding(bottom = 8.dp)
                 )
 
-                // 亮度值显示
+                // Brightness value display
                 Text(
                     text = "${sliderPosition.toInt()}%",
                     fontSize = 20.sp,
                     modifier = Modifier.align(Alignment.CenterHorizontally)
                 )
 
-                // 亮度滑块
+                // Brightness slider
                 Slider(
                     value = sliderPosition,
                     onValueChange = { value ->
@@ -211,7 +211,7 @@ fun MainScreen(
                     modifier = Modifier.padding(vertical = 16.dp)
                 )
 
-                // 亮度预设按钮
+                // Brightness preset buttons
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.SpaceEvenly
@@ -245,11 +245,11 @@ fun MainScreen(
             }
         }
 
-        // 操作按钮
+        // Action buttons
         Column(
             modifier = Modifier.fillMaxWidth()
         ) {
-            // 主动作按钮
+            // Main action button
             Button(
                 onClick = { sendWifiStatus() },
                 colors = ButtonDefaults.buttonColors(
@@ -261,27 +261,27 @@ fun MainScreen(
                 shape = RoundedCornerShape(8.dp)
             ) {
                 Text(
-                    text = "发送所有状态",
+                    text = "Send All Status",
                     fontSize = 16.sp,
                     modifier = Modifier.padding(vertical = 4.dp)
                 )
             }
 
-            // 次要操作按钮
+            // Secondary action buttons
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.spacedBy(8.dp)
             ) {
-                // 重连按钮
+                // Reconnect button
                 OutlinedButton(
                     onClick = { connectToAWSIoT() },
                     modifier = Modifier.weight(1f),
                     shape = RoundedCornerShape(8.dp)
                 ) {
-                    Text("重连MQTT")
+                    Text("Reconnect MQTT")
                 }
 
-                // 设置按钮 - 弹出设置选项
+                // Settings button - toggle options
                 OutlinedButton(
                     onClick = { showSettings = !showSettings },
                     modifier = Modifier.weight(1f),
@@ -289,17 +289,17 @@ fun MainScreen(
                 ) {
                     Icon(
                         imageVector = Icons.Default.Settings,
-                        contentDescription = "设置"
+                        contentDescription = "Settings"
                     )
                     if (!showSettings) {
-                        Text("更多选项", modifier = Modifier.padding(start = 4.dp))
+                        Text("More Options", modifier = Modifier.padding(start = 4.dp))
                     } else {
-                        Text("隐藏选项", modifier = Modifier.padding(start = 4.dp))
+                        Text("Hide Options", modifier = Modifier.padding(start = 4.dp))
                     }
                 }
             }
 
-            // 设置选项
+            // Settings options
             AnimatedVisibility(
                 visible = showSettings,
                 enter = fadeIn() + expandVertically(),
@@ -317,17 +317,17 @@ fun MainScreen(
                         modifier = Modifier.padding(16.dp)
                     ) {
                         ActionButton(
-                            text = "发送WiFi状态",
+                            text = "Send WiFi Status",
                             onClick = { sendWifiStatusChange(if (isWifiEnabled) "ON" else "OFF", connectedWifiSSID) }
                         )
 
                         ActionButton(
-                            text = "发送蓝牙状态",
+                            text = "Send Bluetooth Status",
                             onClick = { sendBluetoothDeviceChange(if (isBluetoothEnabled) "ON" else "OFF", pairedDevices.size.toString()) }
                         )
 
                         ActionButton(
-                            text = "发送亮度状态",
+                            text = "Send Brightness Status",
                             onClick = { sendBrightnessChange(sliderPosition.toInt()) }
                         )
                     }
@@ -357,18 +357,18 @@ fun DeviceStatusCard(
             modifier = Modifier.padding(16.dp)
         ) {
             Text(
-                text = "设备状态",
+                text = "Device Status",
                 fontSize = 16.sp,
                 fontWeight = FontWeight.Bold,
                 modifier = Modifier.padding(bottom = 16.dp)
             )
 
-            // 蓝牙状态
+            // Bluetooth status
             StatusRow(
                 iconPainter = rememberVectorPainter(Icons.Outlined.Bluetooth),
-                title = "蓝牙",
-                status = if (isBluetoothEnabled) "已开启" else "已关闭",
-                detail = "已配对设备: $pairedDevicesCount",
+                title = "Bluetooth",
+                status = if (isBluetoothEnabled) "Enabled" else "Disabled",
+                detail = "Paired devices: $pairedDevicesCount",
                 isActive = isBluetoothEnabled
             )
 
@@ -377,12 +377,12 @@ fun DeviceStatusCard(
                 color = Color.LightGray.copy(alpha = 0.5f)
             )
 
-            // WiFi状态
+            // WiFi status
             StatusRow(
                 iconPainter = rememberVectorPainter(Icons.Outlined.Wifi),
                 title = "WiFi",
-                status = if (isWifiEnabled) "已开启" else "已关闭",
-                detail = if (isWifiEnabled && connectedWifiSSID != "\"\"") "已连接: $connectedWifiSSID" else "未连接",
+                status = if (isWifiEnabled) "Enabled" else "Disabled",
+                detail = if (isWifiEnabled && connectedWifiSSID != "\"\"") "Connected to: $connectedWifiSSID" else "Not connected",
                 isActive = isWifiEnabled
             )
 
@@ -391,15 +391,15 @@ fun DeviceStatusCard(
                 color = Color.LightGray.copy(alpha = 0.5f)
             )
 
-            // 亮度状态
+            // Brightness status
             StatusRow(
                 iconPainter = rememberVectorPainter(Icons.Outlined.BrightnessHigh),
-                title = "屏幕亮度",
+                title = "Screen Brightness",
                 status = "$brightness%",
                 detail = when {
-                    brightness < 30 -> "较暗"
-                    brightness < 70 -> "适中"
-                    else -> "较亮"
+                    brightness < 30 -> "Low"
+                    brightness < 70 -> "Medium"
+                    else -> "High"
                 },
                 isActive = true
             )

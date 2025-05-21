@@ -63,7 +63,7 @@ class MainActivity : ComponentActivity() {
     private val customerSpecificEndpoint = "aiier2of1blw9-ats.iot.us-east-1.amazonaws.com"
     private lateinit var mqttManager: AWSIotMqttManager
     private var isConnected = false
-    private var debugMessage by mutableStateOf("正在连接...")
+    private var debugMessage by mutableStateOf("Connecting...")
 
     private lateinit var bluetoothMonitor: BluetoothMonitor
     private lateinit var wifiMonitor: WifiMonitor
@@ -82,7 +82,7 @@ class MainActivity : ComponentActivity() {
 
     // 用于控制发送消息频率的变量
     private var lastMessageTime = 0L
-    private val messageCooldown = 2000 // 2秒冷却时间
+    private val messageCooldown = 2000 // 2 seconds cooldown time
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -128,7 +128,7 @@ class MainActivity : ComponentActivity() {
         connectToAWSIoT()
 
         val brightness = Utils.getScreenBrightness(contentResolver)
-        Log.d("ScreenBrightness", "当前屏幕亮度: $brightness")
+        Log.d("ScreenBrightness", "Current screen brightness: $brightness")
 
         // 请求写入设置权限
         if (!Settings.System.canWrite(this)) {
@@ -188,8 +188,8 @@ class MainActivity : ComponentActivity() {
 
     private fun connectToAWSIoT() {
         try {
-            Log.d("AWS-IoT", "开始连接...")
-            debugMessage = "正在连接AWS IoT..."
+            Log.d("AWS-IoT", "Starting connection...")
+            debugMessage = "Connecting to AWS IoT..."
 
             // 使用设备唯一ID作为客户端ID的一部分，避免冲突
             val deviceId = Settings.Secure.getString(contentResolver, Settings.Secure.ANDROID_ID)
@@ -201,12 +201,12 @@ class MainActivity : ComponentActivity() {
             val rootCAFile = File(filesDir, "root-CA.crt")
 
             if (!certFile.exists() || !keyFile.exists() || !rootCAFile.exists()) {
-                Log.e("AWS-IoT", "证书文件缺失，尝试重新复制")
+                Log.e("AWS-IoT", "Certificate files missing, attempting to re-copy")
                 prepareAssetFiles()
                 // 如果文件仍然不存在，则退出
                 if (!certFile.exists() || !keyFile.exists() || !rootCAFile.exists()) {
-                    debugMessage = "证书文件不存在，无法连接AWS IoT"
-                    Log.e("AWS-IoT", "证书文件缺失")
+                    debugMessage = "Certificate files not found, unable to connect to AWS IoT"
+                    Log.e("AWS-IoT", "Certificate files missing")
                     return
                 }
             }
@@ -229,15 +229,15 @@ class MainActivity : ComponentActivity() {
             val kmf = KeyManagerFactory.getInstance(KeyManagerFactory.getDefaultAlgorithm())
             kmf.init(keyStore, password)
 
-            Log.d("AWS-IoT", "开始MQTT连接...")
+            Log.d("AWS-IoT", "Starting MQTT connection...")
 
             mqttManager.connect(keyStore) { status, throwable ->
                 runOnUiThread {
                     when (status) {
                         AWSIotMqttClientStatusCallback.AWSIotMqttClientStatus.Connected -> {
-                            Log.d("AWS-IoT", "连接成功")
+                            Log.d("AWS-IoT", "Connection successful")
                             isConnected = true
-                            debugMessage = "MQTT客户端已连接"
+                            debugMessage = "MQTT client connected"
                             connectionAttempts = 0
 
                             // 延迟订阅主题
@@ -252,17 +252,17 @@ class MainActivity : ComponentActivity() {
                                             "AMS/device/status",
                                             AWSIotMqttQos.QOS0
                                         )
-                                        Log.d("AWS-IoT", "发送连接状态消息成功")
+                                        Log.d("AWS-IoT", "Sent connection status message successfully")
                                     }
                                 } catch (e: Exception) {
-                                    Log.e("AWS-IoT", "发送连接状态消息失败", e)
+                                    Log.e("AWS-IoT", "Failed to send connection status message", e)
                                 }
                             }, 2000)  // 等待2秒后发送
                         }
                         AWSIotMqttClientStatusCallback.AWSIotMqttClientStatus.ConnectionLost -> {
-                            Log.e("AWS-IoT", "连接丢失", throwable)
+                            Log.e("AWS-IoT", "Connection lost", throwable)
                             isConnected = false
-                            debugMessage = "MQTT连接丢失: ${throwable?.message}"
+                            debugMessage = "MQTT connection lost: ${throwable?.message}"
 
                             // 增加重连间隔，避免频繁重连
                             val reconnectDelay = (Math.min(connectionAttempts, 5) * 1000 + 3000).toLong()
@@ -276,12 +276,12 @@ class MainActivity : ComponentActivity() {
                             }, reconnectDelay)
                         }
                         AWSIotMqttClientStatusCallback.AWSIotMqttClientStatus.Reconnecting -> {
-                            Log.w("AWS-IoT", "重新连接中", throwable)
-                            debugMessage = "正在重新连接..."
+                            Log.w("AWS-IoT", "Reconnecting", throwable)
+                            debugMessage = "Reconnecting..."
                         }
                         else -> {
-                            Log.e("AWS-IoT", "连接失败: $status", throwable)
-                            debugMessage = "连接失败: ${throwable?.message}"
+                            Log.e("AWS-IoT", "Connection failed: $status", throwable)
+                            debugMessage = "Connection failed: ${throwable?.message}"
 
                             // 3秒后重试
                             Handler(Looper.getMainLooper()).postDelayed({
@@ -295,8 +295,8 @@ class MainActivity : ComponentActivity() {
                 }
             }
         } catch (e: Exception) {
-            Log.e("AWS-IoT", "连接过程中出错", e)
-            debugMessage = "连接错误: ${e.message}"
+            Log.e("AWS-IoT", "Error during connection", e)
+            debugMessage = "Connection error: ${e.message}"
             e.printStackTrace()
 
             // 5秒后重试
@@ -317,19 +317,19 @@ class MainActivity : ComponentActivity() {
                     mqttManager.subscribeToTopic("AMS/brightness/control", AWSIotMqttQos.QOS0) { topic, data ->
                         try {
                             val message = String(data)
-                            Log.d("AWS-IoT", "接收到消息: $message")
+                            Log.d("AWS-IoT", "Received message: $message")
                             val json = JSONObject(message)
                             val brightness = json.getInt("screenBrightness")
                             runOnUiThread {
                                 setScreenBrightness(brightness)
                             }
                         } catch (e: Exception) {
-                            Log.e("AWS-IoT", "处理消息时出错", e)
+                            Log.e("AWS-IoT", "Error processing message", e)
                         }
                     }
-                    Log.d("AWS-IoT", "成功订阅亮度控制主题")
+                    Log.d("AWS-IoT", "Successfully subscribed to brightness control topic")
                 } catch (e: Exception) {
-                    Log.e("AWS-IoT", "订阅主题失败", e)
+                    Log.e("AWS-IoT", "Failed to subscribe to topic", e)
                 }
             }
         }, 3000)  // 等待3秒后再订阅
@@ -339,7 +339,7 @@ class MainActivity : ComponentActivity() {
         val connectivityManager = getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
         networkCallback = object : ConnectivityManager.NetworkCallback() {
             override fun onAvailable(network: Network) {
-                Log.d("NetworkMonitor", "网络可用")
+                Log.d("NetworkMonitor", "Network available")
                 if (!isConnected) {
                     Handler(Looper.getMainLooper()).postDelayed({
                         runOnUiThread {
@@ -350,16 +350,16 @@ class MainActivity : ComponentActivity() {
             }
 
             override fun onLost(network: Network) {
-                Log.d("NetworkMonitor", "网络丢失")
+                Log.d("NetworkMonitor", "Network lost")
                 runOnUiThread {
                     isConnected = false
-                    debugMessage = "网络连接丢失"
+                    debugMessage = "Network connection lost"
                 }
             }
 
             override fun onCapabilitiesChanged(network: Network, capabilities: NetworkCapabilities) {
                 val hasInternet = capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
-                Log.d("NetworkMonitor", "网络能力变化，互联网连接: $hasInternet")
+                Log.d("NetworkMonitor", "Network capabilities changed, internet connection: $hasInternet")
             }
         }
 
@@ -375,13 +375,13 @@ class MainActivity : ComponentActivity() {
             val brightnessValue = (brightness * 2047) / 100 // 将百分比转换为系统亮度值
             if (Settings.System.canWrite(this)) {
                 Settings.System.putInt(contentResolver, Settings.System.SCREEN_BRIGHTNESS, brightnessValue)
-                Log.d("ScreenBrightness", "亮度已设置为: $brightness%")
+                Log.d("ScreenBrightness", "Brightness set to: $brightness%")
             } else {
-                Log.e("ScreenBrightness", "没有写入设置的权限")
-                debugMessage = "无法设置亮度：需要写入设置的权限"
+                Log.e("ScreenBrightness", "No permission to write settings")
+                debugMessage = "Cannot set brightness: No permission to write settings"
             }
         } catch (e: Exception) {
-            Log.e("ScreenBrightness", "设置亮度失败", e)
+            Log.e("ScreenBrightness", "Failed to set brightness", e)
         }
     }
 
@@ -392,14 +392,14 @@ class MainActivity : ComponentActivity() {
             if (isConnected && currentTime - lastMessageTime > messageCooldown) {
                 mqttManager.publishString(message, topic, AWSIotMqttQos.QOS0)
                 lastMessageTime = currentTime
-                Log.d("AWS-IoT", "消息发送成功: $message to $topic")
+                Log.d("AWS-IoT", "Message sent successfully: $message to $topic")
             } else if (!isConnected) {
-                Log.w("AWS-IoT", "MQTT未连接，无法发送消息")
+                Log.w("AWS-IoT", "MQTT not connected, unable to send message")
             } else {
-                Log.d("AWS-IoT", "消息发送频率过高，跳过")
+                Log.d("AWS-IoT", "Message send frequency too high, skipping")
             }
         } catch (e: Exception) {
-            Log.e("AWS-IoT", "发送消息失败", e)
+            Log.e("AWS-IoT", "Error sending message", e)
             e.printStackTrace()
         }
     }
@@ -408,7 +408,7 @@ class MainActivity : ComponentActivity() {
         try {
             if (isConnected) {
                 val isWifiEnabled = wifiMonitor.wifiState.value ?: false
-                val connectedWifiSSID = wifiMonitor.connectedWifiSSID.value ?: "未连接"
+                val connectedSSID = wifiMonitor.connectedWifiSSID.value ?: "未连接"
                 val isBluetoothEnabled = bluetoothMonitor.bluetoothState.value ?: false
                 val pairedDevicesCount = bluetoothMonitor.pairedDevices.value?.size ?: 0
                 val brightness = screenBrightnessMonitor.screenBrightness.value ?: 0
@@ -416,7 +416,7 @@ class MainActivity : ComponentActivity() {
                 // 创建JSON对象
                 val statusJson = JSONObject().apply {
                     put("wifiStatus", if (isWifiEnabled) "ON" else "OFF")
-                    put("connectedSSID", connectedWifiSSID)
+                    put("connectedSSID", connectedSSID)
                     put("bluetoothStatus", if (isBluetoothEnabled) "ON" else "OFF")
                     put("pairedDevicesCount", pairedDevicesCount)
                     put("screenBrightness", brightness)
@@ -428,12 +428,12 @@ class MainActivity : ComponentActivity() {
 
                 sendMessageSafely(statusMessage, "AMS/device/status")
             } else {
-                debugMessage = "MQTT客户端未连接"
-                Log.w("AWS-IoT", "MQTT未连接，无法发送状态")
+                debugMessage = "MQTT client not connected"
+                Log.w("AWS-IoT", "MQTT not connected, unable to send status")
             }
         } catch (e: Exception) {
-            debugMessage = "发送状态错误: ${e.message}"
-            Log.e("AWS-IoT", "发送状态时出错", e)
+            debugMessage = "Error sending status: ${e.message}"
+            Log.e("AWS-IoT", "Error sending status", e)
             e.printStackTrace()
         }
     }
@@ -468,7 +468,7 @@ class MainActivity : ComponentActivity() {
                     // 如果文件已存在则删除
                     if (outputFile.exists()) {
                         outputFile.delete()
-                        Log.d("FileCopy", "删除已存在的文件: $fileName")
+                        Log.d("FileCopy", "Deleted existing file: $fileName")
                     }
 
                     val outputStream = outputFile.outputStream()
@@ -476,21 +476,21 @@ class MainActivity : ComponentActivity() {
                     inputStream.close()
                     outputStream.close()
 
-                    Log.d("FileCopy", "成功复制文件 $fileName (${outputFile.length()} 字节)")
+                    Log.d("FileCopy", "Successfully copied file $fileName (${outputFile.length()} bytes)")
                 } catch (e: Exception) {
-                    Log.e("FileCopy", "复制文件失败: $fileName", e)
-                    debugMessage = "文件复制错误: $fileName - ${e.message}"
+                    Log.e("FileCopy", "Failed to copy file: $fileName", e)
+                    debugMessage = "File copy error: $fileName - ${e.message}"
 
                     // 创建空文件便于调试
                     if (!File(filesDir, fileName).exists()) {
                         File(filesDir, fileName).createNewFile()
-                        Log.d("FileCopy", "创建空文件: $fileName")
+                        Log.d("FileCopy", "Created empty file: $fileName")
                     }
                 }
             }
         } catch (e: Exception) {
-            Log.e("FileCopy", "文件处理过程中出错", e)
-            debugMessage = "文件处理错误: ${e.message}"
+            Log.e("FileCopy", "Error during file handling", e)
+            debugMessage = "File copy error: ${e.message}"
         }
     }
 
@@ -500,9 +500,9 @@ class MainActivity : ComponentActivity() {
         if (::mqttManager.isInitialized) {
             try {
                 mqttManager.disconnect()
-                Log.d("AWS-IoT", "MQTT连接已断开")
+                Log.d("AWS-IoT", "MQTT connection disconnected")
             } catch (e: Exception) {
-                Log.e("AWS-IoT", "断开MQTT连接时出错", e)
+                Log.e("AWS-IoT", "Error disconnecting MQTT", e)
             }
         }
 
@@ -514,14 +514,14 @@ class MainActivity : ComponentActivity() {
             unregisterReceiver(wifiReceiver)
             unregisterReceiver(bluetoothReceiver)
         } catch (e: Exception) {
-            Log.e("MainActivity", "注销接收器时出错", e)
+            Log.e("MainActivity", "Error unregistering receiver", e)
         }
 
         // 注销内容观察器
         try {
             contentResolver.unregisterContentObserver(brightnessObserver)
         } catch (e: Exception) {
-            Log.e("MainActivity", "注销内容观察器时出错", e)
+            Log.e("MainActivity", "Error unregistering content observer", e)
         }
 
         // 注销网络回调
@@ -529,7 +529,7 @@ class MainActivity : ComponentActivity() {
             val connectivityManager = getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
             connectivityManager.unregisterNetworkCallback(networkCallback)
         } catch (e: Exception) {
-            Log.e("MainActivity", "注销网络回调时出错", e)
+            Log.e("MainActivity", "Error unregistering network callback", e)
         }
     }
 
@@ -593,7 +593,7 @@ class MainActivity : ComponentActivity() {
             // 获取当前WiFi状态
             val wifiManager = applicationContext.getSystemService(Context.WIFI_SERVICE) as WifiManager
             val wifiStatus = if (wifiManager.isWifiEnabled) "ON" else "OFF"
-            val connectedSSID = wifiManager.connectionInfo.ssid ?: "未知"
+            val connectedSSID = wifiManager.connectionInfo.ssid ?: "Unknown"
 
             // 获取当前蓝牙状态
             val bluetoothStatus = if (bluetoothMonitor.bluetoothState.value == true) "ON" else "OFF"
@@ -616,12 +616,12 @@ class MainActivity : ComponentActivity() {
             // 发送初始化状态
             if (isConnected) {
                 sendMessageSafely(initJson.toString(), "AMS/device/init")
-                Log.d("MainActivity", "已发送初始状态")
+                Log.d("MainActivity", "Initial status sent")
             } else {
-                Log.d("MainActivity", "MQTT未连接，未能发送初始状态")
+                Log.d("MainActivity", "MQTT not connected, unable to send initial status")
             }
         } catch (e: Exception) {
-            Log.e("MainActivity", "发送初始状态时出错", e)
+            Log.e("MainActivity", "Error sending initial status", e)
         }
     }
 }
@@ -672,7 +672,7 @@ class BrightnessObserver(
             val normalizedBrightness = (brightness * 100) / 2047  // 归一化为百分比
             onBrightnessChanged(normalizedBrightness)
         } catch (e: Exception) {
-            Log.e("BrightnessObserver", "获取亮度失败", e)
+            Log.e("BrightnessObserver", "Failed to get brightness", e)
         }
     }
 }
