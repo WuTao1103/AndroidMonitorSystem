@@ -21,70 +21,70 @@ object Utils {
     fun getScreenBrightness(contentResolver: ContentResolver): Int {
         return try {
             val brightness = Settings.System.getInt(contentResolver, Settings.System.SCREEN_BRIGHTNESS)
-            // 归一化亮度值为0-100
+            // Normalize brightness value to 0-100
             (brightness * 100) / 2047
         } catch (e: Settings.SettingNotFoundException) {
-            Log.e("ScreenBrightness", "获取屏幕亮度时出错", e)
+            Log.e("ScreenBrightness", "Error getting screen brightness", e)
             -1
         }
     }
 
     /**
-     * 将PEM格式的证书和私钥转换为PKCS12格式的KeyStore
-     * 增强了错误处理和日志记录
+     * Convert PEM format certificate and private key to PKCS12 format KeyStore
+     * Enhanced error handling and logging
      */
     fun convertPemToPkcs12(filesDir: File): KeyStore {
         try {
-            Log.d("AWS-IoT", "开始证书格式转换...")
+            Log.d("AWS-IoT", "Starting certificate format conversion...")
 
             val certFile = File(filesDir, "cc9.cert.pem")
             val keyFile = File(filesDir, "cc9.private.key")
             val rootCAFile = File(filesDir, "root-CA.crt")
 
-            // 检查文件是否存在
-            if (!certFile.exists()) throw IOException("证书文件不存在: cc9.cert.pem")
-            if (!keyFile.exists()) throw IOException("私钥文件不存在: cc9.private.key")
-            if (!rootCAFile.exists()) throw IOException("根CA文件不存在: root-CA.crt")
+            // Check if file exists
+            if (!certFile.exists()) throw IOException("Certificate file not found: cc9.cert.pem")
+            if (!keyFile.exists()) throw IOException("Private key file not found: cc9.private.key")
+            if (!rootCAFile.exists()) throw IOException("Root CA file not found: root-CA.crt")
 
-            // 检查文件大小是否为0
-            if (certFile.length() == 0L) throw IOException("证书文件为空: cc9.cert.pem")
-            if (keyFile.length() == 0L) throw IOException("私钥文件为空: cc9.private.key")
-            if (rootCAFile.length() == 0L) throw IOException("根CA文件为空: root-CA.crt")
+            // Check if file size is 0
+            if (certFile.length() == 0L) throw IOException("Certificate file is empty: cc9.cert.pem")
+            if (keyFile.length() == 0L) throw IOException("Private key file is empty: cc9.private.key")
+            if (rootCAFile.length() == 0L) throw IOException("Root CA file is empty: root-CA.crt")
 
             val certPem = certFile.readText()
             val keyPem = keyFile.readText()
             val rootCAPem = rootCAFile.readText()
 
-            Log.d("AWS-IoT", "文件读取成功: 证书=${certPem.length}字节, 私钥=${keyPem.length}字节, 根CA=${rootCAPem.length}字节")
+            Log.d("AWS-IoT", "File read success: Certificate=${certPem.length} bytes, Private Key=${keyPem.length} bytes, Root CA=${rootCAPem.length} bytes")
 
-            // 创建KeyStore实例
+            // Create KeyStore instance
             val keyStore = KeyStore.getInstance("PKCS12")
             keyStore.load(null, null)
 
-            // 创建证书工厂
+            // Create certificate factory
             val cf = CertificateFactory.getInstance("X.509")
 
-            // 生成证书对象
+            // Generate certificate object
             var cert: X509Certificate? = null
             var rootCA: X509Certificate? = null
 
             try {
                 cert = cf.generateCertificate(certPem.byteInputStream()) as X509Certificate
-                Log.d("AWS-IoT", "证书解析成功: 主题=${cert.subjectX500Principal}")
+                Log.d("AWS-IoT", "Certificate parsing success: Subject=${cert.subjectX500Principal}")
             } catch (e: Exception) {
-                Log.e("AWS-IoT", "证书解析失败", e)
-                throw IOException("证书解析失败: ${e.message}")
+                Log.e("AWS-IoT", "Certificate parsing failed", e)
+                throw IOException("Certificate parsing failed: ${e.message}")
             }
 
             try {
                 rootCA = cf.generateCertificate(rootCAPem.byteInputStream()) as X509Certificate
-                Log.d("AWS-IoT", "根CA解析成功: 主题=${rootCA.subjectX500Principal}")
+                Log.d("AWS-IoT", "Root CA parsing success: Subject=${rootCA.subjectX500Principal}")
             } catch (e: Exception) {
-                Log.e("AWS-IoT", "根CA解析失败", e)
-                throw IOException("根CA解析失败: ${e.message}")
+                Log.e("AWS-IoT", "Root CA parsing failed", e)
+                throw IOException("Root CA parsing failed: ${e.message}")
             }
 
-            // 处理私钥
+            // Process private key
             val privateKeyPem = keyPem
                 .replace("-----BEGIN PRIVATE KEY-----", "")
                 .replace("-----END PRIVATE KEY-----", "")
@@ -93,22 +93,22 @@ object Utils {
                 .replace("\\s+".toRegex(), "")
 
             if (privateKeyPem.isEmpty()) {
-                throw IOException("私钥内容为空")
+                throw IOException("Private key content is empty")
             }
 
-            // 生成私钥对象
+            // Generate private key object
             val privateKey: PrivateKey
             try {
                 val keySpec = PKCS8EncodedKeySpec(Base64.decode(privateKeyPem, Base64.DEFAULT))
                 val kf = KeyFactory.getInstance("RSA")
                 privateKey = kf.generatePrivate(keySpec)
-                Log.d("AWS-IoT", "私钥解析成功: 算法=${privateKey.algorithm}")
+                Log.d("AWS-IoT", "Private key parsing success: Algorithm=${privateKey.algorithm}")
             } catch (e: Exception) {
-                Log.e("AWS-IoT", "私钥解析失败", e)
-                throw IOException("私钥解析失败: ${e.message}")
+                Log.e("AWS-IoT", "Private key parsing failed", e)
+                throw IOException("Private key parsing failed: ${e.message}")
             }
 
-            // 将私钥和证书存入KeyStore
+            // Store private key and certificate in KeyStore
             val password = "temp".toCharArray()
             keyStore.setKeyEntry(
                 "iot-certificate",
@@ -117,30 +117,30 @@ object Utils {
                 arrayOf(cert, rootCA)
             )
 
-            // 将根证书单独存储
+            // Store root certificate separately
             keyStore.setCertificateEntry("root-ca", rootCA)
 
-            Log.d("AWS-IoT", "证书转换成功")
+            Log.d("AWS-IoT", "Certificate conversion success")
             return keyStore
 
         } catch (e: Exception) {
-            Log.e("AWS-IoT", "证书转换失败", e)
+            Log.e("AWS-IoT", "Certificate conversion failed", e)
 
-            // 为了避免应用崩溃，创建一个空的KeyStore
+            // To avoid application crash, create an empty KeyStore
             try {
                 val emptyKeyStore = KeyStore.getInstance("PKCS12")
                 emptyKeyStore.load(null, null)
-                Log.w("AWS-IoT", "已创建空KeyStore作为替代")
+                Log.w("AWS-IoT", "Empty KeyStore created as alternative")
                 return emptyKeyStore
             } catch (ex: Exception) {
-                Log.e("AWS-IoT", "创建空KeyStore失败", ex)
+                Log.e("AWS-IoT", "Failed to create empty KeyStore", ex)
                 throw ex
             }
         }
     }
 
     /**
-     * 创建SSL上下文
+     * Create SSL context
      */
     fun createSslContextFromKeyStore(keyStore: KeyStore): SSLContext {
         try {
@@ -153,14 +153,14 @@ object Utils {
 
             return sslContext
         } catch (e: Exception) {
-            Log.e("AWS-IoT", "创建SSL上下文失败", e)
+            Log.e("AWS-IoT", "Failed to create SSL context", e)
             throw e
         }
     }
 
     /**
-     * 验证证书文件
-     * 返回一个包含验证结果的Map
+     * Validate certificate files
+     * Returns a Map containing validation results
      */
     fun validateCertificateFiles(filesDir: File): Map<String, Boolean> {
         val results = mutableMapOf<String, Boolean>()
@@ -174,15 +174,15 @@ object Utils {
             val file = File(filesDir, fileName)
             val exists = file.exists() && file.length() > 0
             results[fileName] = exists
-            Log.d("CertValidation", "$fileName 存在: $exists, 大小: ${if (exists) file.length() else 0} 字节")
+            Log.d("CertValidation", "$fileName exists: $exists, Size: ${if (exists) file.length() else 0} bytes")
         }
 
         return results
     }
 
     /**
-     * 创建默认空证书文件
-     * 仅用于开发/测试目的
+     * Create default empty certificate files
+     * Only for development/test purposes
      */
     fun createEmptyDefaultCertificates(filesDir: File) {
         val files = listOf(
@@ -196,9 +196,9 @@ object Utils {
             if (!file.exists() || file.length() == 0L) {
                 try {
                     file.writeText(content)
-                    Log.d("CertCreation", "创建默认空证书文件: $fileName")
+                    Log.d("CertCreation", "Created default empty certificate file: $fileName")
                 } catch (e: Exception) {
-                    Log.e("CertCreation", "创建默认空证书文件失败: $fileName", e)
+                    Log.e("CertCreation", "Failed to create default empty certificate file: $fileName", e)
                 }
             }
         }

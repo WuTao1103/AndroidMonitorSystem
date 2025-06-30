@@ -16,18 +16,18 @@ import android.bluetooth.BluetoothGatt
 import android.bluetooth.BluetoothGattCallback
 
 class BluetoothMonitor(private val context: Context) {
-    // 蓝牙适配器
+    // Bluetooth adapter
     private val bluetoothAdapter: BluetoothAdapter? = BluetoothAdapter.getDefaultAdapter()
 
-    // 用于观察蓝牙状态变化的LiveData
+    // LiveData for observing Bluetooth state changes
     private val _bluetoothState = MutableLiveData<Boolean>()
     val bluetoothState: LiveData<Boolean> get() = _bluetoothState
 
-    // 用于观察已配对设备的LiveData
+    // LiveData for observing paired devices
     private val _pairedDevices = MutableLiveData<List<BluetoothDevice>>()
     val pairedDevices: LiveData<List<BluetoothDevice>> get() = _pairedDevices
 
-    // 监听蓝牙状态变化的广播接收器
+    // Broadcast receiver for monitoring Bluetooth state changes
     private val bluetoothStateReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
             if (intent?.action == BluetoothAdapter.ACTION_STATE_CHANGED) {
@@ -37,20 +37,20 @@ class BluetoothMonitor(private val context: Context) {
         }
     }
 
-    // 初始化
+    // Initialize
     init {
-        // 注册蓝牙状态变化的广播接收器
+        // Register broadcast receiver for Bluetooth state changes
         val filter = IntentFilter(BluetoothAdapter.ACTION_STATE_CHANGED)
         context.registerReceiver(bluetoothStateReceiver, filter)
 
-        // 初始化当前蓝牙状态
+        // Initialize current Bluetooth state
         _bluetoothState.value = bluetoothAdapter?.isEnabled
 
-        // 加载已配对设备
+        // Load paired devices
         loadPairedDevices()
     }
 
-    // 加载已配对设备
+    // Load paired devices
     private fun loadPairedDevices() {
         if (ActivityCompat.checkSelfPermission(context, Manifest.permission.BLUETOOTH_CONNECT) == PackageManager.PERMISSION_GRANTED) {
             val pairedDevicesSet: Set<BluetoothDevice>? = bluetoothAdapter?.bondedDevices
@@ -63,13 +63,13 @@ class BluetoothMonitor(private val context: Context) {
         }
     }
 
-    // 获取已连接设备的名称
+    // Get connected device name
     fun getConnectedDeviceNames(): List<String> {
         val connectedDeviceNames = mutableListOf<String>()
         if (ActivityCompat.checkSelfPermission(context, Manifest.permission.BLUETOOTH_CONNECT) == PackageManager.PERMISSION_GRANTED) {
             val pairedDevicesSet: Set<BluetoothDevice>? = bluetoothAdapter?.bondedDevices
             pairedDevicesSet?.forEach { device ->
-                // 检查设备是否连接到特定服务
+                // Check if device is connected to specific service
                 if (isDeviceConnected(device)) {
                     connectedDeviceNames.add(device.name)
                 }
@@ -97,7 +97,7 @@ class BluetoothMonitor(private val context: Context) {
         return isConnected
     }
 
-    // 清理资源
+    // Cleanup resources
     fun cleanup() {
         context.unregisterReceiver(bluetoothStateReceiver)
     }
